@@ -21,3 +21,4 @@ _Founding and cross-cutting decisions — tool existence, the shared manifest co
 | ADR | Title | Status |
 |-----|-------|--------|
 | [ADR-001](./foundation/ADR-001-clean-room-agent-native-dotfiles-tool-on-the-shared-manifest.md) | Clean-room agent-native dotfiles tool on the shared manifest | Draft |
+| [ADR-002](./foundation/ADR-002-the-manifest-is-a-self-documenting-catalog.md) | The manifest is a self-documenting catalog | Draft |

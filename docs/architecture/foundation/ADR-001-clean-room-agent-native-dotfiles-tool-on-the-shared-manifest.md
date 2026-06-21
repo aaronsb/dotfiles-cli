@@ -4,7 +4,8 @@ date: 2026-06-21
 deciders:
   - aaronsb
   - claude
-related: []
+related:
+  - ADR-002
 ---
 
 # ADR-001: Clean-room agent-native dotfiles tool on the shared manifest
@@ -17,10 +18,16 @@ copy mode for nested git repos) and the verbs `status`, `deploy`, `add`,
 `enable`, `disable`. Because configs deploy as symlinks, an edit to the repo
 file and the deployed file are the *same bytes* — there is no apply/sync step.
 
-We want to iterate this into something richer: a lifecycle surface
-(view / edit / configure / execute) plus a **live status view** so that when an
-agent (e.g. Claude Code) edits a managed config, those changes are visible as
-they happen.
+We want to iterate this into something richer. The *primary* altitude is a
+**documented inventory** — what we have dotfiles for, their properties, and
+*why* each exists (see ADR-002) — not byte-level inspection of file contents.
+On top of that sits an **optional** collaborative-review surface: a live
+"observe" view of the git working-tree diff, for drilling into an actual
+change. Review is never a forced step — a human may trust the change or open
+their own editor — and the value holds with or without an agent: an agent
+*amplifies* the workflow, it is not a prerequisite. This makes the tool
+**git-native**, not AI-specific; the agent-friendliness falls out of surfacing
+git, which agents already speak.
 
 A survey of the field found that TUI-based dotfiles managers barely exist; the
 one serious example, **DotState** (Rust/Ratatui, MIT), is a striking
@@ -41,8 +48,9 @@ prototype gate is warranted.
 
 ## Decision
 
-Build **`dotfiles-tui`**, a clean-room, agent-native lifecycle + live-watch
-tool, on the following invariants:
+Build **`dotfiles-tui`**, a clean-room, **git-native** lifecycle tool —
+agent-friendly by construction, not agent-specific — on the following
+invariants:
 
 1. **The manifest is the durable contract; tools are interchangeable, optional
    readers of it.** `dotfiles-tui` must read and write the *existing*
@@ -66,8 +74,9 @@ tool, on the following invariants:
 4. **One core, two front-ends.** A pure core crate (manifest parsing, symlink
    ops, watch loop, status) behind: a **non-interactive JSON CLI** (the agent
    surface — fully scriptable, structured output) and a **Ratatui TUI** (the
-   human surface, including live-watch of files mutating under external edits).
-   Both present the same live state.
+   human surface — primarily the documented inventory (ADR-002), with an
+   *optional* "observe" view that renders the live git-diff of a changing
+   file). Both present the same state.
 
 5. **Polyrepo + submodule, release-based production install.** `dotfiles-tui`
    is its own repo, linked into the config store as a submodule at
@@ -151,5 +160,6 @@ tool, on the following invariants:
   occupies the "lifecycle TUI" niche better than a Bash rewrite would, and it
   abandons the scriptable/agent surface. One-core-two-front-ends keeps both the
   human and the agent first-class.
-- **Keep the Bash script only (do nothing).** Rejected: it cannot offer a live
-  status view of agent edits, which is the motivating capability.
+- **Keep the Bash script only (do nothing).** Rejected: it offers no
+  high-altitude "what do I manage and why" inventory (ADR-002) and no optional
+  review view — the motivating capabilities.
