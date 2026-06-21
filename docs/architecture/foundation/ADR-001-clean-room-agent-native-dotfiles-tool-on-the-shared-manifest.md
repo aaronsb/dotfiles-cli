@@ -32,10 +32,12 @@ either gut or adopt a foreign storage model, and would collide on the
 a tool, a clean build on your own model is usually faster than bending someone
 else's frame to fit.
 
-The load-bearing, still-unvalidated bet in this design is external to any code
-we can read: that **live-watching agent edits via filesystem events reflects
-changes reliably and cheaply enough to be the headline feature.** This ADR
-therefore stays `Draft` until a throwaway probe confirms it (see *Probe gate*).
+The live status view is not an exotic bet. The config store is a git repo and
+managed files are symlinks into it, so *what changed* is exactly the git
+working-tree diff (`git status` / `git diff`) — the source of truth this repo
+already declares. The mechanism is a **git working-tree watcher**, not a bespoke
+filesystem-event layer; it is well-understood and cheap to reverse, so no
+prototype gate is warranted.
 
 ## Decision
 
@@ -80,15 +82,16 @@ tool, on the following invariants:
    point Bash demotes to reference spec / fallback (it is not necessarily
    deleted).
 
-### Probe gate (Draft → Accepted)
-
-Before this ADR is accepted, build the smallest throwaway that watches a
-symlinked managed file via filesystem events (the Rust `notify` crate /
-inotify) while an external process edits it, and confirm the prediction:
-*edits surface in the watcher within a sub-second, low-overhead loop with no
-missed events on symlinked targets.* Confirm → flip to `Accepted` citing the
-measurement. Disprove → revise the live-watch approach (or the whole premise)
-before any real code is built on it.
+7. **Git is the change feed, and a hard precondition the tool establishes for
+   itself.** Live status is computed from the git working-tree diff of the
+   watched repo (`git status` / `git diff`) — not a bespoke inotify/stat layer.
+   On first run against a location with no git repo, the tool refuses to operate
+   and directs the user to create one (*"no git repo found — init your dotfiles
+   repo to begin"*); from then on git is assumed. Both deployment modes already
+   satisfy this: symlink targets live in the store's tree, and copy-mode targets
+   are nested git repos with their own tree. This binds the *application*, not
+   the manifest contract — the manifest stays git- and tool-independent and
+   remains appliable by hand.
 
 ## Consequences
 
@@ -104,6 +107,9 @@ before any real code is built on it.
   invariant — no apply step to lag behind, which is exactly what copy-based
   managers (chezmoi, yadm) cannot do cleanly.
 - No fork means no attribution/engine/name-collision debt.
+- The watcher reuses git's existing semantic diff instead of inventing a change
+  feed, and the first-run init gate guarantees its own precondition by
+  construction — one mechanism, no degraded fallback path to maintain.
 
 ### Negative
 
@@ -113,12 +119,16 @@ before any real code is built on it.
   working engine — more upfront work than a fork.
 - A submodule adds a (development-only) moving part and a version-pinning
   discipline the config store must maintain.
+- Git becomes mandatory to *use the tool*: dotfiles kept outside version
+  control must be `git init`ed first. This is a deliberate first-run gate, not a
+  silent failure — and it does not constrain hand-application of the manifest.
 
 ### Neutral
 
 - Establishes this repo's own ADR series (foundation / interface / packaging).
-- Headline feature (live-watch) is gated on an external measurement, so the
-  decision is deliberately held at `Draft` until probed.
+- Change *detection* (the git working-tree watcher) is distinct from change
+  *rendering* (syntax-highlighting the diff in the TUI, e.g. via tree-sitter);
+  the latter is an interface concern, deferred to an interface ADR.
 - Binary name (vs. the repo name `dotfiles-tui`) is deferred to an interface
   ADR; `dotf`/`dotctl` are candidates, since the CLI is also the scripting
   surface.
