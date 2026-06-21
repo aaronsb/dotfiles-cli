@@ -1,0 +1,43 @@
+# ADR Configuration
+# Defines domain numbering and validation rules.
+# Used by: docs/scripts/adr
+
+project_name: dotfiles-tui
+
+# Domain Number Series
+domains:
+  foundation:
+    range: [1, 99]
+    name: Foundation
+    description: Founding and cross-cutting decisions — tool existence, the shared manifest contract, relationship to the dotfiles config store, migration posture
+    folder: foundation
+
+  interface:
+    range: [100, 199]
+    name: Interface
+    description: Surfaces over the shared core — the non-interactive JSON CLI (agent surface) and the Ratatui TUI (human surface), live-watch presentation
+    folder: interface
+
+  packaging:
+    range: [200, 299]
+    name: Packaging
+    description: Distribution and lifecycle — submodule/release install split, version pinning, in-place upgrade, platform artifacts
+    folder: packaging
+
+# Valid ADR statuses
+statuses:
+  - Draft
+  - Proposed
+  - Accepted
+  - Superseded
+  - Deprecated
+
+# Default values for new ADRs
+defaults:
+  deciders:
+    - aaronsb
+    - claude
+  status: Draft
+
+# Viewer command for `adr view`
+viewer: cat {file}
