@@ -210,6 +210,7 @@ mod tests {
                         enabled: true,
                         mode: Mode::Symlink,
                         why: None,
+                        spec: None,
                     },
                     status: DeployStatus::Linked,
                 })

@@ -6,6 +6,7 @@
 //! derivation and the always-fresh projection land in the next slices.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// How an entry is deployed (ADR-001 #1).
@@ -46,10 +47,59 @@ pub struct Entry {
     /// The durable *why* docstring (ADR-002). Advisory; may be absent.
     #[serde(default)]
     pub why: Option<String>,
+    /// Optional structured spec (ADR-006). Absent for simple entries.
+    #[serde(default)]
+    pub spec: Option<Spec>,
 }
 
 fn default_true() -> bool {
     true
+}
+
+/// Structured requirements an entry declares (ADR-006). All fields optional.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Requires {
+    #[serde(default)]
+    pub packages: Vec<String>,
+    #[serde(default)]
+    pub groups: Vec<String>,
+    #[serde(default)]
+    pub binaries: Vec<String>,
+    #[serde(default)]
+    pub configs: Vec<String>,
+    /// Other managed entries this one depends on (ADR-005 interdependence).
+    #[serde(default)]
+    pub entries: Vec<String>,
+    /// Unrecognized `requires.*` keys, captured and surfaced (ADR-006).
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, toml::Value>,
+}
+
+/// An optional structured specification of what an entry is and needs (ADR-006).
+///
+/// Recognized keys parse into fields; anything else is captured in `extra` and
+/// surfaced as "unrecognized" — never silently dropped nor hard-rejected, so the
+/// format stays forward-compatible while typos remain visible.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Spec {
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub concern: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub platform: Option<String>,
+    #[serde(default)]
+    pub provides: Vec<String>,
+    /// Other managed entries this one depends on.
+    #[serde(default)]
+    pub depends: Vec<String>,
+    #[serde(default)]
+    pub requires: Option<Requires>,
+    /// Unrecognized `spec.*` keys, captured and surfaced (ADR-006).
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, toml::Value>,
 }
 
 /// The parsed manifest: a TOML array-of-tables of `[[entry]]` (ADR-003).
@@ -231,6 +281,37 @@ mod tests {
         assert_eq!(m.entries[0].why.as_deref(), Some("Cross-machine shell baseline."));
         assert!(!m.entries[1].enabled);
         assert!(m.entries[1].why.is_none());
+        assert!(m.entries[0].spec.is_none());
+    }
+
+    #[test]
+    fn parses_spec_and_captures_unknown_keys() {
+        let src = r#"
+            [[entry]]
+            name = "zprofile"
+            path = "zsh/.zprofile"
+            target = ".zprofile"
+            why = "hook"
+            spec.summary = "launch fb terminal"
+            spec.concern = "terminal-bootstrap"
+            spec.platform = "linux-vt"
+            spec.requires.packages = ["mlterm-fb"]
+            spec.requires.entries = ["mlterm-main"]
+            spec.launches = ["~/.local/bin/mlterm-fb"]
+            spec.run_mode = "run-not-exec"
+        "#;
+        let m = Manifest::from_toml(src).expect("parses");
+        let spec = m.entries[0].spec.as_ref().expect("has a spec");
+
+        // recognized keys -> typed fields
+        assert_eq!(spec.concern.as_deref(), Some("terminal-bootstrap"));
+        let requires = spec.requires.as_ref().expect("has requires");
+        assert_eq!(requires.packages, ["mlterm-fb"]);
+        assert_eq!(requires.entries, ["mlterm-main"]);
+
+        // unrecognized keys -> captured, not dropped (ADR-006 capture-and-surface)
+        assert!(spec.extra.contains_key("launches"));
+        assert!(spec.extra.contains_key("run_mode"));
     }
 
     #[cfg(unix)]
@@ -251,6 +332,7 @@ mod tests {
             enabled: true,
             mode: Mode::Symlink,
             why: None,
+            spec: None,
         };
 
         assert_eq!(deploy_status(&entry, &repo, &home), DeployStatus::Missing);
