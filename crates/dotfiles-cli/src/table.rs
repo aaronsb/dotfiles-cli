@@ -15,8 +15,8 @@ pub const YELLOW: &str = "\x1b[33m";
 pub const RED: &str = "\x1b[31m";
 pub const CYAN: &str = "\x1b[36m";
 
-/// Header row style: dim + underline.
-const HEADER: &str = "\x1b[2;4m";
+/// Header row style: bold + underline (clearly visible column labels).
+const HEADER: &str = "\x1b[1;4m";
 
 /// Column (and cell) alignment.
 #[derive(Clone, Copy, PartialEq, Eq)]
