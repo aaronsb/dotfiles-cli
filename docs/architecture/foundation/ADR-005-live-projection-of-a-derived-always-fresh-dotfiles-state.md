@@ -1,5 +1,5 @@
 ---
-status: Accepted
+status: Superseded
 date: 2026-06-21
 deciders:
   - aaronsb
@@ -8,6 +8,7 @@ related:
   - ADR-001
   - ADR-002
   - ADR-100
+  - ADR-007
 ---
 
 # ADR-005: Live projection of a derived always-fresh dotfiles state

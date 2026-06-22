@@ -24,12 +24,13 @@ _Founding and cross-cutting decisions — tool existence, the shared manifest co
 | [ADR-002](./foundation/ADR-002-the-manifest-is-a-self-documenting-catalog.md) | The manifest is a self-documenting catalog | Accepted |
 | [ADR-003](./foundation/ADR-003-manifest-serialization-as-toml-array-of-tables.md) | Manifest serialization as TOML array-of-tables | Accepted |
 | [ADR-004](./foundation/ADR-004-crate-workspace-shape-and-library-stack.md) | Crate workspace shape and library stack | Accepted |
-| [ADR-005](./foundation/ADR-005-live-projection-of-a-derived-always-fresh-dotfiles-state.md) | Live projection of a derived always-fresh dotfiles state | Accepted |
-| [ADR-006](./foundation/ADR-006-optional-per-entry-spec-vocabulary.md) | Optional per-entry spec vocabulary | Draft |
+| [ADR-005](./foundation/ADR-005-live-projection-of-a-derived-always-fresh-dotfiles-state.md) | Live projection of a derived always-fresh dotfiles state | Superseded |
+| [ADR-006](./foundation/ADR-006-optional-per-entry-spec-vocabulary.md) | Optional per-entry spec vocabulary | Accepted |
+| [ADR-007](./foundation/ADR-007-reduce-scope-to-a-self-documenting-schema-and-a-cli-retire-the-tui-and-projection.md) | Reduce scope to a self-documenting schema and a CLI; retire the TUI and projection | Accepted |
 
 ## Interface
 _Surfaces over the shared core — the non-interactive JSON CLI (agent surface) and the Ratatui TUI (human surface), live-watch presentation_
 
 | ADR | Title | Status |
 |-----|-------|--------|
-| [ADR-100](./interface/ADR-100-change-detail-diff-rendering.md) | Change-detail diff rendering | Accepted |
+| [ADR-100](./interface/ADR-100-change-detail-diff-rendering.md) | Change-detail diff rendering | Superseded |

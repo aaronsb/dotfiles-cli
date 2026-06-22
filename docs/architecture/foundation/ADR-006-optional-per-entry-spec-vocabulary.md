@@ -1,5 +1,5 @@
 ---
-status: Draft
+status: Accepted
 date: 2026-06-21
 deciders:
   - aaronsb
@@ -8,6 +8,7 @@ related:
   - ADR-002
   - ADR-003
   - ADR-005
+  - ADR-007
 ---
 
 # ADR-006: Optional per-entry spec vocabulary

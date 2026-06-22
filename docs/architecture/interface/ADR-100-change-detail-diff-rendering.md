@@ -1,5 +1,5 @@
 ---
-status: Accepted
+status: Superseded
 date: 2026-06-21
 deciders:
   - aaronsb
@@ -8,6 +8,7 @@ related:
   - ADR-001
   - ADR-004
   - ADR-005
+  - ADR-007
 ---
 
 # ADR-100: Change-detail diff rendering
