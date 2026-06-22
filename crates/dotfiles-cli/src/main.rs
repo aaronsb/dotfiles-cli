@@ -5,6 +5,7 @@
 //! `status`, `deploy`, `enable`, `disable`, `add`, `remove`, `list`, `push`.
 
 mod commands;
+mod pkg;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use dotfiles_core::{DeployStatus, Manifest, Mode, State};
@@ -90,6 +91,8 @@ enum Command {
         #[arg(long, short)]
         details: bool,
     },
+    /// Track explicitly-installed packages per host (pacman / AUR / flatpak).
+    Pkg(pkg::PkgArgs),
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -192,6 +195,10 @@ fn main() -> anyhow::Result<()> {
         Command::Diff { branch, details } => {
             let ctx = Ctx::resolve(&cli)?;
             commands::diff(&ctx, branch, *details)?;
+        }
+        Command::Pkg(args) => {
+            let ctx = Ctx::resolve(&cli)?;
+            pkg::run(&ctx, args)?;
         }
     }
     Ok(())
