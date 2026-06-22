@@ -72,21 +72,35 @@ name = "mlterm-main"
 path = "mlterm/main"
 target = ".mlterm/main"
 why = "Core mlterm settings (font, scrollbar off, colors) for the framebuffer terminal."
+spec.concern = "terminal-bootstrap"
 
 [[entry]]
 name = "mlterm-aafont"
 path = "mlterm/aafont"
 target = ".mlterm/aafont"
 why = "mlterm anti-alias font mapping (generated); kept managed so a fresh machine has working fonts out of the box."
+spec.concern = "terminal-bootstrap"
 
 [[entry]]
 name = "mlterm-color"
 path = "mlterm/color"
 target = ".mlterm/color"
 why = "mlterm color palette."
+spec.concern = "terminal-bootstrap"
 
 [[entry]]
 name = "zprofile"
 path = "zsh/.zprofile"
 target = ".zprofile"
 why = "Login-shell profile: launches the keyboard-resolving mlterm-fb wrapper by absolute path on bare-VT console login (PATH lacks ~/.local/bin that early)."
+# Demonstrates ADR-006: recognized keys (summary/concern/platform/requires) parse
+# into fields; kind/launches/run_mode are unrecognized -> captured & surfaced.
+spec.summary  = "Auto-launch mlterm-fb on bare-VT login, guarded and lockout-proof."
+spec.concern  = "terminal-bootstrap"
+spec.kind     = "login-shell-hook"
+spec.platform = "linux-vt"
+spec.launches = ["~/.local/bin/mlterm-fb"]
+spec.run_mode = "run-not-exec"
+spec.requires.packages = ["mlterm-fb"]
+spec.requires.groups   = ["video", "input"]
+spec.requires.entries  = ["mlterm-main", "mlterm-aafont", "mlterm-color"]
