@@ -7,7 +7,7 @@
 //! files) and delegates the set math to [`dotfiles_core::pkg`].
 
 use crate::Ctx;
-use crate::table::{Align, Table, cell};
+use crate::table::{self, Align, Cell, Table, cell};
 use dotfiles_core::pkg::{self, Source, normalize};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -50,23 +50,31 @@ pub fn run(ctx: &Ctx, args: &PkgArgs) -> anyhow::Result<()> {
 /// `pkg capture` — write the live list of every available source to disk.
 fn capture(packages_dir: &Path, host: &str) -> anyhow::Result<()> {
     let dir = packages_dir.join(host);
-    println!("=== Capturing packages for '{host}' ===\n");
     std::fs::create_dir_all(&dir)?;
 
+    let mut t = Table::new()
+        .title(format!("Capturing packages for '{host}'"))
+        .column("SOURCE", Align::Left)
+        .column("PACKAGES", Align::Right)
+        .column("FILE", Align::Left);
     let mut captured = false;
     for src in Source::ALL {
         if !source_available(src) {
-            println!("{}: not available here — skipped", src.name());
+            t.row(vec![cell(src.name()), cell("-").fg(table::DIM), cell("not available here").fg(table::DIM)]);
             continue;
         }
         let list = live_list(src);
         let file = dir.join(format!("{}.txt", src.name()));
         let body = if list.is_empty() { String::new() } else { format!("{}\n", list.join("\n")) };
         std::fs::write(&file, body)?;
-        println!("{}: wrote {} package(s) -> packages/{host}/{}.txt", src.name(), list.len(), src.name());
+        t.row(vec![
+            cell(src.name()),
+            cell(list.len().to_string()).fg(table::GREEN),
+            cell(format!("packages/{host}/{}.txt", src.name())),
+        ]);
         captured = true;
     }
-
+    t.print();
     println!();
     if captured {
         println!("Review with `git diff`, then `dotfiles push` to record.");
@@ -79,30 +87,38 @@ fn capture(packages_dir: &Path, host: &str) -> anyhow::Result<()> {
 /// `pkg status` — per-source drift between tracked and live.
 fn status(packages_dir: &Path, host: &str, local: &str) -> anyhow::Result<()> {
     let is_local = host == local;
-    println!("=== Package status for '{host}' ===");
-    if !is_local {
-        println!("(remote host — showing tracked lists only, no live diff)");
-    }
-    println!();
 
     // Remote host: report tracked desired state only.
     if !is_local {
+        let mut t = Table::new()
+            .title(format!("Package status for '{host}' (remote — tracked only)"))
+            .column("SOURCE", Align::Left)
+            .column("TRACKED", Align::Right);
         let mut any = false;
         for src in Source::ALL {
-            let tracked = read_tracked(packages_dir, host, src);
             if !tracked_file_exists(packages_dir, host, src) {
                 continue;
             }
             any = true;
-            println!("{}: {} tracked package(s)", src.name(), tracked.len());
+            t.row(vec![cell(src.name()), cell(read_tracked(packages_dir, host, src).len().to_string())]);
         }
-        println!();
-        if !any {
+        if any {
+            t.print();
+        } else {
             println!("No tracked lists for '{host}' yet — run `dotfiles pkg capture` on it.");
         }
         return Ok(());
     }
 
+    let mut t = Table::new()
+        .title(format!("Package status for '{host}'"))
+        .column("SOURCE", Align::Left)
+        .column("TRACKED", Align::Right)
+        .column("LIVE", Align::Right)
+        .column("MISSING", Align::Right)
+        .column("UNTRACKED", Align::Right)
+        .column("STATE", Align::Left);
+    let mut details: Vec<String> = Vec::new();
     let mut any = false;
     for src in Source::ALL {
         let has_file = tracked_file_exists(packages_dir, host, src);
@@ -112,38 +128,56 @@ fn status(packages_dir: &Path, host: &str, local: &str) -> anyhow::Result<()> {
         }
         any = true;
         if !has_file {
-            println!("{}: installed here but not tracked — run `dotfiles pkg capture`", src.name());
+            t.row(vec![cell(src.name()), cell("-").fg(table::DIM), cell("-").fg(table::DIM), cell("-").fg(table::DIM), cell("-").fg(table::DIM), cell("untracked — run capture").fg(table::YELLOW)]);
             continue;
         }
         if !available {
-            println!("{}: tracked, but {} not installed on this host", src.name(), src.name());
+            let tracked = read_tracked(packages_dir, host, src);
+            t.row(vec![cell(src.name()), cell(tracked.len().to_string()), cell("-").fg(table::DIM), cell("-").fg(table::DIM), cell("-").fg(table::DIM), cell("source not installed").fg(table::DIM)]);
             continue;
         }
-        let d = pkg::drift(&read_tracked(packages_dir, host, src), &live_list(src));
-        if d.in_sync() {
-            println!("{}: in sync", src.name());
-            continue;
-        }
-        println!("{}:", src.name());
+        let tracked = read_tracked(packages_dir, host, src);
+        let live = live_list(src);
+        let d = pkg::drift(&tracked, &live);
+        let (state, state_color) = if d.in_sync() {
+            ("in sync", table::GREEN)
+        } else {
+            ("drift", table::YELLOW)
+        };
+        t.row(vec![
+            cell(src.name()),
+            cell(tracked.len().to_string()),
+            cell(live.len().to_string()),
+            count_cell(d.missing.len(), table::YELLOW),
+            count_cell(d.extra.len(), table::CYAN),
+            cell(state).fg(state_color),
+        ]);
         if !d.missing.is_empty() {
-            println!("  tracked but not installed (sync installs):");
-            for p in &d.missing {
-                println!("    + {p}");
-            }
+            details.push(format!("  {} to install ({}): {}", src.name(), d.missing.len(), d.missing.join(" ")));
         }
         if !d.extra.is_empty() {
-            println!("  installed but not tracked (capture records / --prune removes):");
-            for p in &d.extra {
-                println!("    - {p}");
-            }
+            details.push(format!("  {} untracked ({}): {}", src.name(), d.extra.len(), d.extra.join(" ")));
         }
     }
 
-    println!();
     if !any {
         println!("No tracked lists or supported package managers for '{host}'.");
+        return Ok(());
+    }
+    t.print();
+    if !details.is_empty() {
+        println!();
+        for d in details {
+            println!("{d}");
+        }
     }
     Ok(())
+}
+
+/// A right-aligned count cell: colored when non-zero, dim when zero.
+fn count_cell(n: usize, nonzero: &'static str) -> Cell {
+    let c = cell(n.to_string());
+    if n > 0 { c.fg(nonzero) } else { c.fg(table::DIM) }
 }
 
 /// `pkg sync` — install tracked-but-missing; with `--prune`, remove untracked.
@@ -236,33 +270,48 @@ fn diff_pair(packages_dir: &Path, a: &str, b: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// N-way diff across every tracked host, per source.
+/// N-way diff across every tracked host, per source — a host matrix of unique
+/// counts plus a `COMMON` column, with the unique package lists below.
 fn diff_all(packages_dir: &Path) -> anyhow::Result<()> {
     let hosts = tracked_hosts(packages_dir);
     if hosts.len() < 2 {
         anyhow::bail!("need at least 2 tracked hosts to diff (have {}).", hosts.len());
     }
-    println!("=== packages across {} hosts: {} ===\n", hosts.len(), hosts.join(" · "));
+    let mut t = Table::new()
+        .title(format!("packages across {} hosts", hosts.len()))
+        .column("SOURCE", Align::Left)
+        .column("COMMON", Align::Right);
+    for h in &hosts {
+        t = t.column(h.clone(), Align::Right);
+    }
+
+    let mut details: Vec<String> = Vec::new();
     for src in Source::ALL {
-        println!("{}", src.name());
         let lists: Vec<(String, Vec<String>)> = hosts
             .iter()
             .map(|h| (h.clone(), read_tracked(packages_dir, h, src)))
             .collect();
         let n = pkg::nway_diff(&lists);
-        let participating = n.unique.len();
-        if participating == 0 {
-            println!("  (no host has any {} packages)\n", src.name());
-            continue;
-        }
-        println!("  ● {} common to all {participating}", n.common);
-        for (host, uniq) in &n.unique {
-            println!("  ◆ {host:<8} {} unique", uniq.len());
-            if !uniq.is_empty() {
-                println!("      {}", uniq.join(" "));
+        let mut row = vec![cell(src.name()), count_cell(n.common, table::GREEN)];
+        for h in &hosts {
+            match n.unique.iter().find(|(hn, _)| hn == h) {
+                Some((_, uniq)) => {
+                    row.push(count_cell(uniq.len(), table::CYAN));
+                    if !uniq.is_empty() {
+                        details.push(format!("  {}/{h} unique ({}): {}", src.name(), uniq.len(), uniq.join(" ")));
+                    }
+                }
+                None => row.push(cell("-").fg(table::DIM)),
             }
         }
+        t.row(row);
+    }
+    t.print();
+    if !details.is_empty() {
         println!();
+        for d in details {
+            println!("{d}");
+        }
     }
     Ok(())
 }
