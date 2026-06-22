@@ -12,41 +12,57 @@ use dotfiles_core::pkg::{self, Source, normalize};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-/// Arguments to the `pkg` verb: `pkg [capture|status|sync|diff] [--host N]
-/// [--prune] [host-args...]`. A missing action defaults to `status`.
+/// Arguments to the `pkg` verb. A missing action defaults to `status`.
 #[derive(clap::Args)]
 pub struct PkgArgs {
-    /// Subcommand: `capture`, `status`, `sync`, or `diff`.
-    #[arg(default_value = "status")]
-    action: String,
-    /// Inspect another host's tracked lists (capture/status), or a diff target.
-    #[arg(long)]
-    host: Option<String>,
-    /// `sync` only: also remove untracked (live-but-not-tracked) packages.
-    #[arg(long)]
-    prune: bool,
-    /// `sync` only: preview what would be installed/removed, change nothing.
-    #[arg(long)]
-    dry_run: bool,
-    /// `diff` host arguments: none = all hosts, 1 = this vs HOST, 2 = A B.
-    #[arg(trailing_var_arg = true)]
-    args: Vec<String>,
+    #[command(subcommand)]
+    action: Option<PkgAction>,
 }
 
-/// Dispatch the `pkg` verb.
+/// The `pkg` sub-actions, as real clap subcommands (ADR-101).
+#[derive(clap::Subcommand)]
+enum PkgAction {
+    /// Write the live list of every available source to disk.
+    Capture {
+        /// Label the capture under another host's directory.
+        #[arg(long)]
+        host: Option<String>,
+    },
+    /// Per-source drift between tracked and live.
+    Status {
+        /// Inspect another host's tracked lists.
+        #[arg(long)]
+        host: Option<String>,
+    },
+    /// Install tracked-but-missing; with `--prune`, remove untracked. Local only.
+    Sync {
+        /// Also remove untracked (live-but-not-tracked) packages.
+        #[arg(long)]
+        prune: bool,
+        /// Preview what would be installed/removed, change nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Diff tracked lists: no args = all hosts, 1 = this vs HOST, 2 = A B.
+    Diff {
+        /// Host arguments.
+        #[arg(trailing_var_arg = true)]
+        hosts: Vec<String>,
+    },
+}
+
+/// Dispatch the `pkg` verb. A missing sub-action defaults to `status` (local).
 pub fn run(ctx: &Ctx, args: &PkgArgs) -> anyhow::Result<()> {
     let packages_dir = ctx.repo_root.join("packages");
     let local = short_hostname();
-    let host = args.host.clone().unwrap_or_else(|| local.clone());
+    let host_or_local = |h: &Option<String>| h.clone().unwrap_or_else(|| local.clone());
 
-    match args.action.as_str() {
-        "capture" => capture(&packages_dir, &host),
-        "status" => status(&packages_dir, &host, &local),
-        "sync" => sync(&packages_dir, &host, &local, args.prune, args.dry_run),
-        "diff" => diff(&packages_dir, &local, &args.args),
-        other => anyhow::bail!(
-            "unknown pkg subcommand '{other}' — try: pkg [capture|status|sync|diff] [--host <name>] [--prune]"
-        ),
+    match args.action.as_ref() {
+        None => status(&packages_dir, &local, &local),
+        Some(PkgAction::Status { host }) => status(&packages_dir, &host_or_local(host), &local),
+        Some(PkgAction::Capture { host }) => capture(&packages_dir, &host_or_local(host)),
+        Some(PkgAction::Sync { prune, dry_run }) => sync(&packages_dir, &local, *prune, *dry_run),
+        Some(PkgAction::Diff { hosts }) => diff(&packages_dir, &local, hosts),
     }
 }
 
@@ -184,12 +200,10 @@ fn count_cell(n: usize, nonzero: &'static str) -> Cell {
 }
 
 /// `pkg sync` — install tracked-but-missing; with `--prune`, remove untracked.
-/// Guarded to the local host, since it mutates the live system. `--dry-run`
-/// previews the plan without changing anything.
-fn sync(packages_dir: &Path, host: &str, local: &str, prune: bool, dry_run: bool) -> anyhow::Result<()> {
-    if host != local {
-        anyhow::bail!("refusing to sync: target host '{host}' is not this machine ('{local}'). sync changes the live system, so it only runs locally.");
-    }
+/// Always operates on the local host, since it mutates the live system.
+/// `--dry-run` previews the plan without changing anything.
+fn sync(packages_dir: &Path, local: &str, prune: bool, dry_run: bool) -> anyhow::Result<()> {
+    let host = local;
     let title = if dry_run {
         format!("Sync preview for '{host}' (dry run)")
     } else {

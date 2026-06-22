@@ -7,54 +7,75 @@ use crate::table::{self, Align, Table, cell};
 use dotfiles_core::{Manifest, edit};
 use std::path::Path;
 
-/// `profile [list|add|remove|copy|use] [name...] [flags]`. Default action `list`.
+/// `profile [list|add|remove|copy|use] …`. A missing action defaults to `list`.
 #[derive(clap::Args)]
 pub struct ProfileArgs {
-    /// Action: `list`, `add`, `remove`, `copy`, `use`.
-    #[arg(default_value = "list")]
-    action: String,
-    /// Positional names: `<name>` for add/remove/use, `<src> <dst>` for copy.
-    #[arg(trailing_var_arg = true)]
-    names: Vec<String>,
-    /// `add`: human description of the profile.
-    #[arg(long)]
-    desc: Option<String>,
-    /// `add`: hostname match glob (e.g. `vm-*`) for fleet resolution.
-    #[arg(long = "match")]
-    match_pattern: Option<String>,
-    /// `copy`: copy only this entry's membership to the destination.
-    #[arg(long)]
-    only: Option<String>,
-    /// `copy`: copy dotfile memberships (entries tagged with the source).
-    #[arg(long)]
-    dotfiles: bool,
-    /// `copy`: copy package lists; optionally one source (native|aur|flatpak).
-    #[arg(long, num_args = 0..=1, default_missing_value = "all")]
-    pkg: Option<String>,
-    /// `remove`: also delete the profile's `packages/<name>/` lists (destructive).
-    #[arg(long)]
-    purge: bool,
+    #[command(subcommand)]
+    action: Option<ProfileAction>,
 }
 
-/// Dispatch the `profile` verb.
+/// The `profile` sub-actions, as real clap subcommands (ADR-101).
+#[derive(clap::Subcommand)]
+enum ProfileAction {
+    /// List declared profiles, with the active one marked.
+    List,
+    /// Declare a profile and create its package dir.
+    Add {
+        /// Profile name to declare.
+        name: String,
+        /// Human description of the profile.
+        #[arg(long)]
+        desc: Option<String>,
+        /// Hostname match glob (e.g. `vm-*`) for fleet resolution.
+        #[arg(long = "match")]
+        match_pattern: Option<String>,
+    },
+    /// Drop the registry entry and strip it from entry tags.
+    #[command(alias = "rm")]
+    Remove {
+        /// Profile name to remove.
+        name: String,
+        /// Also delete the profile's `packages/<name>/` lists (destructive).
+        #[arg(long)]
+        purge: bool,
+    },
+    /// Copy memberships and/or package lists from one profile to another.
+    #[command(alias = "cp")]
+    Copy {
+        /// Source profile to copy from.
+        src: String,
+        /// Destination profile (must already be declared).
+        dst: String,
+        /// Copy only this entry's membership to the destination.
+        #[arg(long)]
+        only: Option<String>,
+        /// Copy dotfile memberships (entries tagged with the source).
+        #[arg(long)]
+        dotfiles: bool,
+        /// Copy package lists; optionally one source (native|aur|flatpak).
+        #[arg(long, num_args = 0..=1, default_missing_value = "all")]
+        pkg: Option<String>,
+    },
+    /// Record the active profile in `.dotfiles-profile`.
+    Use {
+        /// Profile name to activate (must be declared).
+        name: String,
+    },
+}
+
+/// Dispatch the `profile` verb. A missing sub-action defaults to `list`.
 pub fn run(ctx: &Ctx, args: &ProfileArgs) -> anyhow::Result<()> {
-    match args.action.as_str() {
-        "list" => list(ctx),
-        "add" => add(ctx, args),
-        "remove" | "rm" => remove(ctx, name_at(args, 0)?, args.purge),
-        "copy" | "cp" => copy(ctx, args),
-        "use" => use_profile(ctx, name_at(args, 0)?),
-        other => anyhow::bail!(
-            "unknown profile subcommand '{other}' — try: list, add, remove, copy, use"
-        ),
+    match args.action.as_ref() {
+        None | Some(ProfileAction::List) => list(ctx),
+        Some(ProfileAction::Add { name, desc, match_pattern }) => {
+            add(ctx, name, desc.as_deref(), match_pattern.as_deref())
+        }
+        Some(ProfileAction::Remove { name, purge }) => remove(ctx, name, *purge),
+        Some(ProfileAction::Copy { src, dst, only, dotfiles, pkg }) => {
+            copy(ctx, src, dst, only.as_deref(), *dotfiles, pkg.as_deref())
+        }
+        Some(ProfileAction::Use { name }) => use_profile(ctx, name),
     }
-}
-
-fn name_at(args: &ProfileArgs, i: usize) -> anyhow::Result<&str> {
-    args.names
-        .get(i)
-        .map(String::as_str)
-        .ok_or_else(|| anyhow::anyhow!("expected a profile name"))
 }
 
 fn read_src(ctx: &Ctx) -> anyhow::Result<String> {
@@ -66,8 +87,11 @@ fn read_src(ctx: &Ctx) -> anyhow::Result<String> {
 fn list(ctx: &Ctx) -> anyhow::Result<()> {
     let manifest = ctx.load()?;
     if manifest.profiles.is_empty() {
-        println!("No profiles declared. Active: '{}' (implicit, from hostname).", ctx.profile);
-        println!("Declare one with `dotfiles profile add <name>`.");
+        let p = &ctx.profile;
+        println!("No profiles declared yet.");
+        println!(
+            "'{p}' is active implicitly (derived from the hostname). To declare it, run `dotfiles profile add {p}`."
+        );
         return Ok(());
     }
     let mut t = Table::new()
@@ -96,10 +120,9 @@ fn list(ctx: &Ctx) -> anyhow::Result<()> {
 }
 
 /// `profile add <name>` — declare a profile and create its package dir.
-fn add(ctx: &Ctx, args: &ProfileArgs) -> anyhow::Result<()> {
-    let name = name_at(args, 0)?;
+fn add(ctx: &Ctx, name: &str, desc: Option<&str>, match_pattern: Option<&str>) -> anyhow::Result<()> {
     let mut doc = edit::parse(&read_src(ctx)?)?;
-    edit::add_profile(&mut doc, name, args.desc.as_deref(), args.match_pattern.as_deref())
+    edit::add_profile(&mut doc, name, desc, match_pattern)
         .map_err(|e| anyhow::anyhow!(e))?;
     std::fs::write(&ctx.manifest, doc.to_string())?;
     std::fs::create_dir_all(ctx.repo_root.join("packages").join(name))?;
@@ -138,9 +161,7 @@ fn remove(ctx: &Ctx, name: &str, purge: bool) -> anyhow::Result<()> {
 /// `profile copy <src> <dst> [--only E|--dotfiles|--pkg [source]]` — copy
 /// memberships and/or package lists from one profile to another. With no flags,
 /// copies everything. The destination must already be declared.
-fn copy(ctx: &Ctx, args: &ProfileArgs) -> anyhow::Result<()> {
-    let src = name_at(args, 0)?;
-    let dst = name_at(args, 1)?;
+fn copy(ctx: &Ctx, src: &str, dst: &str, only: Option<&str>, dotfiles: bool, pkg: Option<&str>) -> anyhow::Result<()> {
     if src == dst {
         anyhow::bail!("source and destination profiles are the same ('{src}')");
     }
@@ -150,14 +171,14 @@ fn copy(ctx: &Ctx, args: &ProfileArgs) -> anyhow::Result<()> {
         anyhow::bail!("destination profile '{dst}' is not declared — add it first");
     }
 
-    let all = args.only.is_none() && !args.dotfiles && args.pkg.is_none();
-    let do_dotfiles = all || args.dotfiles || args.only.is_some();
-    let do_pkg = all || args.pkg.is_some();
+    let all = only.is_none() && !dotfiles && pkg.is_none();
+    let do_dotfiles = all || dotfiles || only.is_some();
+    let do_pkg = all || pkg.is_some();
 
     let mut tagged = 0;
     if do_dotfiles {
         let mut doc = edit::parse(&text)?;
-        if let Some(entry) = &args.only {
+        if let Some(entry) = only {
             if !edit::add_entry_profile(&mut doc, entry, dst) {
                 anyhow::bail!("entry '{entry}' not found in the manifest");
             }
@@ -180,7 +201,7 @@ fn copy(ctx: &Ctx, args: &ProfileArgs) -> anyhow::Result<()> {
         let from = ctx.repo_root.join("packages").join(src);
         let to = ctx.repo_root.join("packages").join(dst);
         std::fs::create_dir_all(&to)?;
-        for s in pkg_sources(args.pkg.as_deref()) {
+        for s in pkg_sources(pkg) {
             let f = from.join(format!("{s}.txt"));
             if f.is_file() {
                 std::fs::copy(&f, to.join(format!("{s}.txt")))?;

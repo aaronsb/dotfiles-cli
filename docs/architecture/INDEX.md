@@ -35,3 +35,4 @@ _Surfaces over the shared core — the non-interactive JSON CLI (agent surface) 
 | ADR | Title | Status |
 |-----|-------|--------|
 | [ADR-100](./interface/ADR-100-change-detail-diff-rendering.md) | Change-detail diff rendering | Superseded |
+| [ADR-101](./interface/ADR-101-clap-subcommands-for-nested-verbs.md) | clap subcommands for nested verbs | Draft |
