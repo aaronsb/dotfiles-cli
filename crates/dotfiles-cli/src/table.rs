@@ -52,6 +52,16 @@ pub fn cell(text: impl Into<String>) -> Cell {
     Cell::new(text)
 }
 
+/// Wrap `text` in `color` only on an interactive terminal — the same gating the
+/// table uses, for the CLI's non-table colored output (e.g. `pkg sync`).
+pub fn paint(text: &str, color: &str) -> String {
+    if std::io::stdout().is_terminal() {
+        format!("{color}{text}{RESET}")
+    } else {
+        text.to_string()
+    }
+}
+
 /// A table: an optional title, aligned headers, and rows of cells.
 #[derive(Default)]
 pub struct Table {

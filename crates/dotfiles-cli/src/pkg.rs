@@ -25,6 +25,9 @@ pub struct PkgArgs {
     /// `sync` only: also remove untracked (live-but-not-tracked) packages.
     #[arg(long)]
     prune: bool,
+    /// `sync` only: preview what would be installed/removed, change nothing.
+    #[arg(long)]
+    dry_run: bool,
     /// `diff` host arguments: none = all hosts, 1 = this vs HOST, 2 = A B.
     #[arg(trailing_var_arg = true)]
     args: Vec<String>,
@@ -39,7 +42,7 @@ pub fn run(ctx: &Ctx, args: &PkgArgs) -> anyhow::Result<()> {
     match args.action.as_str() {
         "capture" => capture(&packages_dir, &host),
         "status" => status(&packages_dir, &host, &local),
-        "sync" => sync(&packages_dir, &host, &local, args.prune),
+        "sync" => sync(&packages_dir, &host, &local, args.prune, args.dry_run),
         "diff" => diff(&packages_dir, &local, &args.args),
         other => anyhow::bail!(
             "unknown pkg subcommand '{other}' — try: pkg [capture|status|sync|diff] [--host <name>] [--prune]"
@@ -181,12 +184,18 @@ fn count_cell(n: usize, nonzero: &'static str) -> Cell {
 }
 
 /// `pkg sync` — install tracked-but-missing; with `--prune`, remove untracked.
-/// Guarded to the local host, since it mutates the live system.
-fn sync(packages_dir: &Path, host: &str, local: &str, prune: bool) -> anyhow::Result<()> {
+/// Guarded to the local host, since it mutates the live system. `--dry-run`
+/// previews the plan without changing anything.
+fn sync(packages_dir: &Path, host: &str, local: &str, prune: bool, dry_run: bool) -> anyhow::Result<()> {
     if host != local {
         anyhow::bail!("refusing to sync: target host '{host}' is not this machine ('{local}'). sync changes the live system, so it only runs locally.");
     }
-    println!("=== Syncing packages for '{host}' ===\n");
+    let title = if dry_run {
+        format!("Sync preview for '{host}' (dry run)")
+    } else {
+        format!("Syncing packages for '{host}'")
+    };
+    println!("{}\n", table::paint(&title, "\x1b[1;36m"));
 
     let mut acted = false;
     for src in Source::ALL {
@@ -200,21 +209,31 @@ fn sync(packages_dir: &Path, host: &str, local: &str, prune: bool) -> anyhow::Re
         let d = pkg::drift(&read_tracked(packages_dir, host, src), &live_list(src));
         if !d.missing.is_empty() {
             acted = true;
-            println!("{}: installing {} missing package(s)...", src.name(), d.missing.len());
-            install(src, &d.missing)?;
+            if dry_run {
+                println!("{}: would install {}: {}", src.name(), d.missing.len(), table::paint(&d.missing.join(" "), table::YELLOW));
+            } else {
+                println!("{}: installing {} missing package(s)...", src.name(), d.missing.len());
+                install(src, &d.missing)?;
+            }
         }
         if prune && !d.extra.is_empty() {
             acted = true;
-            println!("{}: removing {} untracked package(s)...", src.name(), d.extra.len());
-            remove(src, &d.extra)?;
+            if dry_run {
+                println!("{}: would remove {}: {}", src.name(), d.extra.len(), table::paint(&d.extra.join(" "), table::RED));
+            } else {
+                println!("{}: removing {} untracked package(s)...", src.name(), d.extra.len());
+                remove(src, &d.extra)?;
+            }
         }
     }
 
     println!();
-    if acted {
-        println!("Sync complete.");
-    } else {
+    if !acted {
         println!("Nothing to do — already in sync.");
+    } else if dry_run {
+        println!("Dry run — no changes made. Re-run without --dry-run to apply.");
+    } else {
+        println!("Sync complete.");
     }
     Ok(())
 }
