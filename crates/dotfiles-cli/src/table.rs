@@ -15,6 +15,9 @@ pub const YELLOW: &str = "\x1b[33m";
 pub const RED: &str = "\x1b[31m";
 pub const CYAN: &str = "\x1b[36m";
 
+/// Header row style: dim + underline.
+const HEADER: &str = "\x1b[2;4m";
+
 /// Column (and cell) alignment.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Align {
@@ -107,7 +110,7 @@ impl Table {
             .iter()
             .enumerate()
             .map(|(i, (h, align))| {
-                render(h, if color { Some(DIM) } else { None }, widths[i], *align, color)
+                render(h, if color { Some(HEADER) } else { None }, widths[i], *align, color)
             })
             .collect();
         println!("{}", join(&header_cells));
