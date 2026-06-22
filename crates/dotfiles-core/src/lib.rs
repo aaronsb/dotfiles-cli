@@ -6,7 +6,7 @@
 //! derivation and the always-fresh projection land in the next slices.
 
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// How an entry is deployed (ADR-001 #1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -159,6 +159,32 @@ impl State {
     }
 }
 
+/// Walk up from `start` to find a git repo root: a directory containing `.git`
+/// (a dir, or — for submodules/worktrees — a file).
+pub fn discover_git_repo(start: &Path) -> Option<PathBuf> {
+    let mut current = std::fs::canonicalize(start).unwrap_or_else(|_| start.to_path_buf());
+    loop {
+        if current.join(".git").exists() {
+            return Some(current);
+        }
+        if !current.pop() {
+            return None;
+        }
+    }
+}
+
+/// First-run precondition (ADR-001 #7): the tool only operates inside a git repo.
+///
+/// Returns the discovered repo root, or a ready-to-print message for the user.
+pub fn first_run_gate(repo_root: &Path) -> Result<PathBuf, String> {
+    discover_git_repo(repo_root).ok_or_else(|| {
+        format!(
+            "no git repo found at {} — init your dotfiles repo to begin (`git init`).",
+            repo_root.display()
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,6 +239,23 @@ mod tests {
 
         symlink(repo.join("zsh/.zshrc"), home.join(".zshrc")).unwrap();
         assert_eq!(deploy_status(&entry, &repo, &home), DeployStatus::Linked);
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn discovers_git_repo_and_gates() {
+        let base = std::env::temp_dir().join(format!("dft-git-{}", std::process::id()));
+        let nested = base.join("a/b");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        assert!(discover_git_repo(&nested).is_none());
+        assert!(first_run_gate(&nested).is_err());
+
+        std::fs::create_dir_all(base.join(".git")).unwrap();
+        let found = discover_git_repo(&nested).expect("finds the repo root");
+        assert_eq!(found, std::fs::canonicalize(&base).unwrap());
+        assert!(first_run_gate(&nested).is_ok());
 
         std::fs::remove_dir_all(&base).ok();
     }

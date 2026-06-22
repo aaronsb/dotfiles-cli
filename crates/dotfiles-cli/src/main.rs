@@ -54,6 +54,11 @@ fn main() -> anyhow::Result<()> {
                 .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
                 .ok_or_else(|| anyhow::anyhow!("no --home and $HOME unset"))?;
 
+            if let Err(msg) = dotfiles_core::first_run_gate(&repo_root) {
+                eprintln!("dotfiles-cli: {msg}");
+                std::process::exit(2);
+            }
+
             let state = State::derive(&m, &repo_root, &home);
             match format {
                 Format::Json => println!("{}", serde_json::to_string_pretty(&state)?),
