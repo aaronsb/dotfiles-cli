@@ -13,3 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 dotfiles-core = { path = "../dotfiles-core" }
+ratatui = "0.30"
+crossterm = "0.29"
+clap.workspace = true
+anyhow.workspace = true
