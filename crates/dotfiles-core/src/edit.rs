@@ -6,7 +6,7 @@
 //! one field (or one `[[entry]]`) being changed moves.
 
 use crate::Mode;
-use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, value};
+use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, value};
 
 /// Parse a manifest into an editable document.
 pub fn parse(src: &str) -> Result<DocumentMut, toml_edit::TomlError> {
@@ -83,6 +83,80 @@ pub fn add_entry(doc: &mut DocumentMut, e: NewEntry) -> Result<(), String> {
     Ok(())
 }
 
+// --- profiles -------------------------------------------------------------
+
+/// Borrow the `[profiles]` table, creating it (implicit, so only the
+/// `[profiles.<name>]` sub-tables render) if absent.
+fn profiles_mut(doc: &mut DocumentMut) -> &mut Table {
+    if doc.get("profiles").and_then(Item::as_table).is_none() {
+        let mut t = Table::new();
+        t.set_implicit(true);
+        doc["profiles"] = Item::Table(t);
+    }
+    doc["profiles"].as_table_mut().expect("just ensured it is a table")
+}
+
+/// Declare a profile `[profiles.<name>]`. Errors if it already exists.
+pub fn add_profile(
+    doc: &mut DocumentMut,
+    name: &str,
+    description: Option<&str>,
+    match_pattern: Option<&str>,
+) -> Result<(), String> {
+    let profiles = profiles_mut(doc);
+    if profiles.contains_key(name) {
+        return Err(format!("profile '{name}' already exists"));
+    }
+    let mut t = Table::new();
+    if let Some(d) = description {
+        t["description"] = value(d);
+    }
+    if let Some(m) = match_pattern {
+        t["match"] = value(m);
+    }
+    profiles.insert(name, Item::Table(t));
+    Ok(())
+}
+
+/// Remove a profile: drop `[profiles.<name>]` and strip `name` from every
+/// entry's `profiles` array (an entry left with none becomes universal again).
+/// Returns whether the `[profiles.<name>]` table existed.
+pub fn remove_profile(doc: &mut DocumentMut, name: &str) -> bool {
+    let existed = doc
+        .get_mut("profiles")
+        .and_then(Item::as_table_mut)
+        .map(|p| p.remove(name).is_some())
+        .unwrap_or(false);
+
+    let aot = entries_mut(doc);
+    for i in 0..aot.len() {
+        let Some(t) = aot.get_mut(i) else { continue };
+        if let Some(arr) = t.get_mut("profiles").and_then(Item::as_array_mut) {
+            arr.retain(|v| v.as_str() != Some(name));
+            if arr.is_empty() {
+                t.remove("profiles");
+            }
+        }
+    }
+    existed
+}
+
+/// Add `profile` to an entry's `profiles` array (idempotent). Returns `false`
+/// if no entry has that name.
+pub fn add_entry_profile(doc: &mut DocumentMut, entry: &str, profile: &str) -> bool {
+    let aot = entries_mut(doc);
+    let Some(i) = index_of(aot, entry) else { return false };
+    let t = aot.get_mut(i).expect("index from position");
+    if t.get("profiles").and_then(Item::as_array).is_none() {
+        t["profiles"] = value(Array::new());
+    }
+    let arr = t["profiles"].as_array_mut().expect("just ensured array");
+    if !arr.iter().any(|v| v.as_str() == Some(profile)) {
+        arr.push(profile);
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,5 +220,30 @@ target = ".tmux.conf"
         let m = Manifest::from_toml(&doc.to_string()).unwrap();
         assert_eq!(m.entries.len(), 1);
         assert_eq!(m.entries[0].name, "zsh");
+    }
+
+    #[test]
+    fn add_and_remove_profile_round_trip() {
+        let mut doc = parse(SRC).unwrap();
+        add_profile(&mut doc, "desktop", Some("workstation"), None).unwrap();
+        add_profile(&mut doc, "vm", None, Some("vm-*")).unwrap();
+        assert!(add_profile(&mut doc, "desktop", None, None).is_err(), "duplicate rejected");
+
+        // tag zsh into desktop, then remove the profile and confirm the tag is stripped.
+        assert!(add_entry_profile(&mut doc, "zsh", "desktop"));
+        assert!(add_entry_profile(&mut doc, "zsh", "desktop"), "idempotent");
+        assert!(!add_entry_profile(&mut doc, "ghost", "desktop"));
+
+        let m = Manifest::from_toml(&doc.to_string()).unwrap();
+        assert_eq!(m.profiles["vm"].match_pattern.as_deref(), Some("vm-*"));
+        assert_eq!(m.entries.iter().find(|e| e.name == "zsh").unwrap().profiles, ["desktop"]);
+        assert!(doc.to_string().contains("# a manifest"), "comment preserved");
+
+        assert!(remove_profile(&mut doc, "desktop"));
+        let m = Manifest::from_toml(&doc.to_string()).unwrap();
+        assert!(!m.profiles.contains_key("desktop"));
+        // zsh's only profile was desktop -> stripped -> universal again.
+        assert!(m.entries.iter().find(|e| e.name == "zsh").unwrap().profiles.is_empty());
+        assert!(!remove_profile(&mut doc, "desktop"), "second remove is a no-op");
     }
 }

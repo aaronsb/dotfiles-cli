@@ -182,6 +182,7 @@ mod tests {
             mode,
             why: None,
             spec: None,
+            profiles: vec![],
         }
     }
 
