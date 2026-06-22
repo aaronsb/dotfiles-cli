@@ -6,6 +6,7 @@ deciders:
   - claude
 related:
   - ADR-001
+  - ADR-003
 ---
 
 # ADR-002: The manifest is a self-documenting catalog

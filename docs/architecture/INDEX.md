@@ -22,3 +22,12 @@ _Founding and cross-cutting decisions — tool existence, the shared manifest co
 |-----|-------|--------|
 | [ADR-001](./foundation/ADR-001-clean-room-agent-native-dotfiles-tool-on-the-shared-manifest.md) | Clean-room agent-native dotfiles tool on the shared manifest | Draft |
 | [ADR-002](./foundation/ADR-002-the-manifest-is-a-self-documenting-catalog.md) | The manifest is a self-documenting catalog | Draft |
+| [ADR-003](./foundation/ADR-003-manifest-serialization-as-toml-array-of-tables.md) | Manifest serialization as TOML array-of-tables | Draft |
+| [ADR-004](./foundation/ADR-004-crate-workspace-shape-and-library-stack.md) | Crate workspace shape and library stack | Draft |
+
+## Interface
+_Surfaces over the shared core — the non-interactive JSON CLI (agent surface) and the Ratatui TUI (human surface), live-watch presentation_
+
+| ADR | Title | Status |
+|-----|-------|--------|
+| [ADR-100](./interface/ADR-100-observe-mode-live-diff-rendering.md) | Observe mode live diff rendering | Draft |
