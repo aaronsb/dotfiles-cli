@@ -48,7 +48,8 @@ property and drops the heaviest, least-used surface.
 > **Decisions recorded this session:**
 > - **#1 Language: Rust** (confirmed — reuse `dotfiles-core` + `dotfiles-cli`).
 > - **#3 Bash's fate: the Rust binary _is_ the tool** — it "acts like the bash script version, written in Rust": same verbs and behavior (`deploy`/`status`/`enable`/`disable`/`add`/`push`), reading the rich TOML schema instead of the pipe format. Bash may linger as a reference/fallback (ADR-001 #3) but is no longer primary.
-> - **Still to confirm at execution:** #2 repo/binary rename (recommend binary `dotf`; repo away from `-tui`) and #4 the submodule story.
+> - **#2 Name (confirmed):** the binary is named **`dotfiles`** — a drop-in replacement for the bash tool (same name, same muscle memory). **The bash tool is renamed `dotfiles-bash`** (temporary, for convergence testing) so the Rust `dotfiles` takes the canonical name *now* and both coexist on PATH. Convergence test = run `dotfiles` (Rust) and `dotfiles-bash` against the same manifest and diff the output; once the Rust one is trusted, **delete `dotfiles-bash`**. The GitHub repo renames `dotfiles-tui` → `dotfiles` (GitHub redirects the old URL).
+> - **#4 Submodule (confirmed):** **drop it.** Unstage `.gitmodules` + the `dotfiles-tui` gitlink from the `.dotfiles` superproject. The tool is an independently-installed binary (from GitHub Releases); `.dotfiles` pins the desired version as a plain string. The submodule existed mainly to vendor TUI source, which is gone.
 
 ## Execution steps (for the post-compaction agent)
 
