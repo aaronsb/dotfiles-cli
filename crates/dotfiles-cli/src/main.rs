@@ -274,21 +274,33 @@ fn status(ctx: &Ctx, format: Format) -> anyhow::Result<()> {
     match format {
         Format::Json => println!("{}", serde_json::to_string_pretty(&state)?),
         Format::Human => {
+            // Provenance: a declared `[profiles.<name>]` scope, or an implicit
+            // hostname fallback. Shares `profile list`'s vocabulary (ADR-102).
+            let declared = manifest.profiles.contains_key(&ctx.profile);
+            let provenance = if declared { "declared" } else { "implicit" };
             let mut t = Table::new()
-                .title(format!("Dotfiles Status (profile: {})", ctx.profile))
+                .title(format!("Dotfiles Status — profile: {} ({provenance})", ctx.profile))
                 .column("APP", Align::Left)
                 .column("TARGET", Align::Left)
                 .column("STATUS", Align::Left);
             let mut issues = 0;
+            // Scope breakdown so a profile-filtered report announces its basis.
+            let (mut universal, mut scoped, mut other) = (0u32, 0u32, 0u32);
             for es in &state.entries {
                 // Entries not in the active profile are intentionally absent here.
                 if !es.entry.active_in(&ctx.profile) {
+                    other += 1;
                     t.row(vec![
                         cell(&es.entry.name),
                         cell(&es.entry.target),
                         cell("other-profile").fg(table::DIM),
                     ]);
                     continue;
+                }
+                if es.entry.profiles.is_empty() {
+                    universal += 1;
+                } else {
+                    scoped += 1;
                 }
                 let (label, color) = status_view(&es.status, es.entry.enabled);
                 if es.entry.enabled
@@ -310,6 +322,18 @@ fn status(ctx: &Ctx, format: Format) -> anyhow::Result<()> {
             }
             t.print();
             println!();
+            // Scope line only when profiles are in use — a profile-indifferent
+            // repo stays uncluttered (ADR-102).
+            if !manifest.profiles.is_empty() {
+                let mut scope = format!(
+                    "Scope ({}): {universal} universal · {scoped} scoped here",
+                    ctx.profile
+                );
+                if other > 0 {
+                    scope.push_str(&format!(" · {other} in other profiles"));
+                }
+                println!("{}", table::paint(&scope, table::DIM));
+            }
             if issues > 0 {
                 println!("{issues} dotfile(s) need attention — run `dotfiles deploy`.");
             } else {

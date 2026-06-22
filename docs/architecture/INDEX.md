@@ -36,3 +36,4 @@ _Surfaces over the shared core — the non-interactive JSON CLI (agent surface) 
 |-----|-------|--------|
 | [ADR-100](./interface/ADR-100-change-detail-diff-rendering.md) | Change-detail diff rendering | Superseded |
 | [ADR-101](./interface/ADR-101-clap-subcommands-for-nested-verbs.md) | clap subcommands for nested verbs | Draft |
+| [ADR-102](./interface/ADR-102-status-reflects-active-profile-state.md) | status reflects active profile state | Draft |
