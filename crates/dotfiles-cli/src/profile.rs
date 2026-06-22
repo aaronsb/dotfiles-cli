@@ -31,6 +31,9 @@ pub struct ProfileArgs {
     /// `copy`: copy package lists; optionally one source (native|aur|flatpak).
     #[arg(long, num_args = 0..=1, default_missing_value = "all")]
     pkg: Option<String>,
+    /// `remove`: also delete the profile's `packages/<name>/` lists (destructive).
+    #[arg(long)]
+    purge: bool,
 }
 
 /// Dispatch the `profile` verb.
@@ -38,7 +41,7 @@ pub fn run(ctx: &Ctx, args: &ProfileArgs) -> anyhow::Result<()> {
     match args.action.as_str() {
         "list" => list(ctx),
         "add" => add(ctx, args),
-        "remove" | "rm" => remove(ctx, name_at(args, 0)?),
+        "remove" | "rm" => remove(ctx, name_at(args, 0)?, args.purge),
         "copy" | "cp" => copy(ctx, args),
         "use" => use_profile(ctx, name_at(args, 0)?),
         other => anyhow::bail!(
@@ -103,9 +106,10 @@ fn add(ctx: &Ctx, args: &ProfileArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `profile remove <name>` — drop the registry entry, strip it from entry tags,
-/// and remove its package dir. Deployed files are left intact.
-fn remove(ctx: &Ctx, name: &str) -> anyhow::Result<()> {
+/// `profile remove <name>` — drop the registry entry and strip it from entry
+/// tags. Keeps the profile's `packages/<name>/` lists unless `--purge`. Deployed
+/// files are always left intact.
+fn remove(ctx: &Ctx, name: &str, purge: bool) -> anyhow::Result<()> {
     let src = read_src(ctx)?;
     let manifest = Manifest::from_toml(&src)?;
     let pkg_dir = ctx.repo_root.join("packages").join(name);
@@ -116,12 +120,17 @@ fn remove(ctx: &Ctx, name: &str) -> anyhow::Result<()> {
     edit::remove_profile(&mut doc, name);
     std::fs::write(&ctx.manifest, doc.to_string())?;
 
-    let mut note = "";
-    if pkg_dir.is_dir() {
-        std::fs::remove_dir_all(&pkg_dir)?;
-        note = " (+ its package lists)";
-    }
-    println!("removed profile '{name}'{note} — entry tags stripped; deployed files left intact.");
+    let note = if pkg_dir.is_dir() {
+        if purge {
+            std::fs::remove_dir_all(&pkg_dir)?;
+            " (+ its package lists, purged)"
+        } else {
+            " — its packages/ lists were kept (use --purge to delete)"
+        }
+    } else {
+        ""
+    };
+    println!("removed profile '{name}'{note}; entry tags stripped, deployed files left intact.");
     Ok(())
 }
 
