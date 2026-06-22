@@ -9,6 +9,7 @@ related:
   - ADR-003
   - ADR-005
   - ADR-007
+  - ADR-009
 ---
 
 # ADR-006: Optional per-entry spec vocabulary
@@ -82,6 +83,11 @@ a *derived* analyzer (ADR-005) to compute **conformance** ("does the file still
 do what its spec says?") — needs the analyzer layer and is **deferred to a
 follow-up ADR**. The tool learns to read and show specs first; checking them
 comes later.
+
+> **Resolved by ADR-009 (2026-06-22): conformance is declined.** The spec stays
+> documentary — stored, serialized, and shown, never checked. The deferral above
+> is closed by *not* building conformance; ADR-005's projection (the assumed
+> foundation) was meanwhile retired by ADR-007.
 
 ## Consequences
 
