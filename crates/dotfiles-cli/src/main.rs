@@ -7,6 +7,7 @@
 mod banner;
 mod commands;
 mod pkg;
+mod profile;
 mod table;
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
@@ -26,6 +27,10 @@ struct Cli {
     /// Home dir that target paths resolve against (default: $HOME).
     #[arg(long, global = true)]
     home: Option<PathBuf>,
+    /// Active profile (default: $DOTFILES_PROFILE, the `.dotfiles-profile` file,
+    /// a `[profiles]` match against the hostname, then the hostname).
+    #[arg(long, global = true)]
+    profile: Option<String>,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -96,6 +101,8 @@ enum Command {
     },
     /// Track explicitly-installed packages per host (pacman / AUR / flatpak).
     Pkg(pkg::PkgArgs),
+    /// Manage profiles — named scopes over dotfiles + packages (per machine/role).
+    Profile(profile::ProfileArgs),
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -124,6 +131,8 @@ struct Ctx {
     manifest: PathBuf,
     repo_root: PathBuf,
     home: PathBuf,
+    /// The active profile (resolved once at startup).
+    profile: String,
 }
 
 impl Ctx {
@@ -156,7 +165,8 @@ impl Ctx {
             eprintln!("dotfiles: {msg}");
             std::process::exit(2);
         }
-        Ok(Ctx { manifest, repo_root, home })
+        let profile = resolve_active_profile(cli, &repo_root, &manifest);
+        Ok(Ctx { manifest, repo_root, home, profile })
     }
 
     /// Read and parse the manifest into the typed catalog.
@@ -165,6 +175,32 @@ impl Ctx {
             .map_err(|e| anyhow::anyhow!("reading {}: {e}", self.manifest.display()))?;
         Ok(Manifest::from_toml(&src)?)
     }
+}
+
+/// Resolve the active profile. An explicit choice — `--profile`,
+/// `$DOTFILES_PROFILE`, or the `.dotfiles-profile` file — wins; otherwise a
+/// `[profiles]` `match` glob against the hostname, then the hostname itself.
+fn resolve_active_profile(cli: &Cli, repo_root: &Path, manifest_path: &Path) -> String {
+    let explicit = cli
+        .profile
+        .clone()
+        .or_else(|| std::env::var("DOTFILES_PROFILE").ok())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            std::fs::read_to_string(repo_root.join(".dotfiles-profile"))
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        });
+    if let Some(name) = explicit {
+        return name;
+    }
+    // Pattern resolution needs the manifest; tolerate a missing/unparseable one.
+    let manifest = std::fs::read_to_string(manifest_path)
+        .ok()
+        .and_then(|s| Manifest::from_toml(&s).ok())
+        .unwrap_or_default();
+    dotfiles_core::resolve_profile(&manifest, None, &pkg::short_hostname())
 }
 
 fn main() -> anyhow::Result<()> {
@@ -223,6 +259,10 @@ fn main() -> anyhow::Result<()> {
             let ctx = Ctx::resolve(&cli)?;
             pkg::run(&ctx, args)?;
         }
+        Command::Profile(args) => {
+            let ctx = Ctx::resolve(&cli)?;
+            profile::run(&ctx, args)?;
+        }
     }
     Ok(())
 }
@@ -235,12 +275,21 @@ fn status(ctx: &Ctx, format: Format) -> anyhow::Result<()> {
         Format::Json => println!("{}", serde_json::to_string_pretty(&state)?),
         Format::Human => {
             let mut t = Table::new()
-                .title("Dotfiles Status")
+                .title(format!("Dotfiles Status (profile: {})", ctx.profile))
                 .column("APP", Align::Left)
                 .column("TARGET", Align::Left)
                 .column("STATUS", Align::Left);
             let mut issues = 0;
             for es in &state.entries {
+                // Entries not in the active profile are intentionally absent here.
+                if !es.entry.active_in(&ctx.profile) {
+                    t.row(vec![
+                        cell(&es.entry.name),
+                        cell(&es.entry.target),
+                        cell("other-profile").fg(table::DIM),
+                    ]);
+                    continue;
+                }
                 let (label, color) = status_view(&es.status, es.entry.enabled);
                 if es.entry.enabled
                     && matches!(

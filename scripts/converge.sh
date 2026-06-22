@@ -35,8 +35,11 @@ if [[ -z "$BIN" ]]; then
 fi
 [[ -x "$BIN" ]] || { echo "converge: no Rust binary at $BIN" >&2; exit 2; }
 
-BASH_TOOL="$BASH_TOOL_SRC/dotfiles"
-[[ -x "$BASH_TOOL" ]] || { echo "converge: no bash tool at $BASH_TOOL" >&2; exit 2; }
+# After the cutover the bash dispatcher is `dotfiles-bash`; fall back to the
+# pre-cutover `dotfiles` name.
+BASH_TOOL="$BASH_TOOL_SRC/dotfiles-bash"
+[[ -x "$BASH_TOOL" ]] || BASH_TOOL="$BASH_TOOL_SRC/dotfiles"
+[[ -x "$BASH_TOOL" ]] || { echo "converge: no bash tool at $BASH_TOOL_SRC/{dotfiles-bash,dotfiles}" >&2; exit 2; }
 
 ROOT="$(mktemp -d)"
 trap 'rm -rf "$ROOT"' EXIT

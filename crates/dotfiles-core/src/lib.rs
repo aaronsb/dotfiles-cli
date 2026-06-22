@@ -53,10 +53,39 @@ pub struct Entry {
     /// Optional structured spec (ADR-006). Absent for simple entries.
     #[serde(default)]
     pub spec: Option<Spec>,
+    /// Profiles this entry belongs to. Empty = universal (active in every
+    /// profile). Non-empty = active only in the listed profiles.
+    #[serde(default)]
+    pub profiles: Vec<String>,
+}
+
+impl Entry {
+    /// Is this entry active in `profile`? Universal entries (no `profiles`
+    /// listed) are active everywhere.
+    pub fn active_in(&self, profile: &str) -> bool {
+        self.profiles.is_empty() || self.profiles.iter().any(|p| p == profile)
+    }
 }
 
 fn default_true() -> bool {
     true
+}
+
+/// A declared profile — a named scope over dotfiles and packages (a machine or
+/// role). Registered under `[profiles.<name>]` in the manifest.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Profile {
+    /// Human rationale for the profile (self-documenting, ADR-002 spirit).
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Optional hostname glob (`*`/`?`). When the active profile is not given
+    /// explicitly, a host whose name matches this pattern resolves to this
+    /// profile — so a fleet (`vm-*`) maps many hosts to one profile.
+    #[serde(default, rename = "match")]
+    pub match_pattern: Option<String>,
+    /// Unrecognized `profiles.<name>.*` keys, captured and surfaced (ADR-006).
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, toml::Value>,
 }
 
 /// Structured requirements an entry declares (ADR-006). All fields optional.
@@ -105,11 +134,16 @@ pub struct Spec {
     pub extra: BTreeMap<String, toml::Value>,
 }
 
-/// The parsed manifest: a TOML array-of-tables of `[[entry]]` (ADR-003).
+/// The parsed manifest: a TOML array-of-tables of `[[entry]]` (ADR-003), plus an
+/// optional `[profiles]` registry.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Manifest {
     #[serde(default, rename = "entry")]
     pub entries: Vec<Entry>,
+    /// Declared profiles, keyed by name (`[profiles.<name>]`). Optional — a
+    /// manifest with no profiles behaves as a single implicit profile.
+    #[serde(default)]
+    pub profiles: BTreeMap<String, Profile>,
 }
 
 impl Manifest {
@@ -117,6 +151,59 @@ impl Manifest {
     pub fn from_toml(src: &str) -> Result<Self, toml::de::Error> {
         toml::from_str(src)
     }
+}
+
+/// Resolve the active profile name.
+///
+/// Precedence: an `explicit` choice (from `--profile` / `$DOTFILES_PROFILE` /
+/// the `.dotfiles-profile` file) wins; otherwise the first declared profile
+/// whose `match` glob matches `hostname` (fleet support); otherwise `hostname`
+/// itself. The result is always a name, even if no profile is declared for it.
+pub fn resolve_profile(manifest: &Manifest, explicit: Option<&str>, hostname: &str) -> String {
+    if let Some(name) = explicit
+        && !name.is_empty()
+    {
+        return name.to_string();
+    }
+    for (name, profile) in &manifest.profiles {
+        if let Some(pattern) = &profile.match_pattern
+            && glob_match(pattern, hostname)
+        {
+            return name.clone();
+        }
+    }
+    hostname.to_string()
+}
+
+/// Minimal glob matcher supporting `*` (any run, including empty) and `?` (any
+/// one character). Anchored at both ends. No character classes — just enough for
+/// hostname fleet patterns like `vm-*` or `build-??`.
+pub fn glob_match(pattern: &str, text: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let t: Vec<char> = text.chars().collect();
+    // Iterative backtracking match.
+    let (mut pi, mut ti) = (0usize, 0usize);
+    let (mut star, mut star_ti): (Option<usize>, usize) = (None, 0);
+    while ti < t.len() {
+        if pi < p.len() && (p[pi] == '?' || p[pi] == t[ti]) {
+            pi += 1;
+            ti += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star = Some(pi);
+            star_ti = ti;
+            pi += 1;
+        } else if let Some(sp) = star {
+            pi = sp + 1;
+            star_ti += 1;
+            ti = star_ti;
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == '*' {
+        pi += 1;
+    }
+    pi == p.len()
 }
 
 /// The deployment status of an entry, derived from the filesystem.
@@ -333,6 +420,7 @@ mod tests {
             mode: Mode::Symlink,
             why: None,
             spec: None,
+            profiles: vec![],
         };
 
         assert_eq!(deploy_status(&entry, &repo, &home), DeployStatus::Missing);
@@ -345,6 +433,70 @@ mod tests {
         assert_eq!(deploy_status(&entry, &repo, &home), DeployStatus::Broken);
 
         std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn parses_profiles_and_entry_membership() {
+        let src = r#"
+            [profiles.desktop]
+            description = "Main workstation"
+            [profiles.vm]
+            match = "vm-*"
+
+            [[entry]]
+            name = "shared"
+            path = "a"
+            target = ".a"
+
+            [[entry]]
+            name = "kde"
+            path = "b"
+            target = ".b"
+            profiles = ["desktop"]
+        "#;
+        let m = Manifest::from_toml(src).expect("parses");
+        assert_eq!(m.profiles.len(), 2);
+        assert_eq!(m.profiles["desktop"].description.as_deref(), Some("Main workstation"));
+        assert_eq!(m.profiles["vm"].match_pattern.as_deref(), Some("vm-*"));
+
+        let shared = &m.entries[0];
+        let kde = &m.entries[1];
+        // Universal entry is active everywhere; tagged entry only in its profile.
+        assert!(shared.active_in("desktop") && shared.active_in("vm") && shared.active_in("anything"));
+        assert!(kde.active_in("desktop"));
+        assert!(!kde.active_in("vm"));
+    }
+
+    #[test]
+    fn glob_matches_fleet_patterns() {
+        assert!(glob_match("vm-*", "vm-01"));
+        assert!(glob_match("vm-*", "vm-"));
+        assert!(!glob_match("vm-*", "web-01"));
+        assert!(glob_match("build-??", "build-42"));
+        assert!(!glob_match("build-??", "build-4"));
+        assert!(glob_match("*", "anything"));
+        assert!(glob_match("exact", "exact"));
+        assert!(!glob_match("exact", "exacto"));
+        assert!(glob_match("a*c", "abbbc"));
+    }
+
+    #[test]
+    fn resolve_profile_precedence() {
+        let src = r#"
+            [profiles.vm]
+            match = "vm-*"
+            [profiles.desktop]
+            description = "ws"
+        "#;
+        let m = Manifest::from_toml(src).unwrap();
+        // explicit wins
+        assert_eq!(resolve_profile(&m, Some("desktop"), "vm-01"), "desktop");
+        // pattern match when no explicit
+        assert_eq!(resolve_profile(&m, None, "vm-09"), "vm");
+        // fall back to hostname when nothing matches
+        assert_eq!(resolve_profile(&m, None, "north"), "north");
+        // empty explicit is ignored
+        assert_eq!(resolve_profile(&m, Some(""), "vm-09"), "vm");
     }
 
     #[test]

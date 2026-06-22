@@ -22,6 +22,10 @@ pub fn deploy(ctx: &Ctx, dry_run: bool, force: bool) -> anyhow::Result<()> {
     }
 
     for e in &manifest.entries {
+        // Skip entries that don't belong to the active profile.
+        if !e.active_in(&ctx.profile) {
+            continue;
+        }
         let verb = if dry_run { "would" } else { "" };
         match deploy_entry(e, &ctx.repo_root, &ctx.home, opts) {
             DeployOutcome::AlreadyDeployed => println!("{:<22} already deployed", e.name),
