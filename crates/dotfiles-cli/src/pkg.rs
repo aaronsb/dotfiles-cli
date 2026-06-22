@@ -369,7 +369,7 @@ fn tracked_hosts(packages_dir: &Path) -> Vec<String> {
 }
 
 /// Short hostname (cut at the first dot), matching the bash `${HOST%%.*}` rule.
-fn short_hostname() -> String {
+pub(crate) fn short_hostname() -> String {
     let raw = std::env::var("HOSTNAME")
         .ok()
         .filter(|s| !s.is_empty())
