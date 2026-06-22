@@ -1,4 +1,4 @@
-# dotfiles-tui workspace (ADR-004): one core, two front-ends.
+# dotfiles workspace (ADR-004, amended by ADR-007): one core, one CLI surface.
 [workspace]
 resolver = "3"
 members = ["crates/*"]

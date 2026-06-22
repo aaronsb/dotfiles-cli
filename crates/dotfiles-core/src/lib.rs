@@ -1,9 +1,8 @@
-//! `dotfiles-core` — the pure state model behind `dotfiles-tui` (ADR-004).
+//! `dotfiles-core` — the pure state model behind the `dotfiles` CLI (ADR-004).
 //!
-//! No UI, no interactive I/O. This crate owns the derived dotfiles state that
-//! both front-ends project (ADR-005). v0.1 scope: parse the TOML manifest
-//! (ADR-003) into the self-documenting catalog (ADR-002). Deploy-status
-//! derivation and the always-fresh projection land in the next slices.
+//! No UI, no interactive I/O. This crate parses the TOML manifest (ADR-003) into
+//! the self-documenting catalog (ADR-002, +`spec` ADR-006) and derives each
+//! entry's deploy status against the filesystem — the state the CLI reports.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -67,7 +66,7 @@ pub struct Requires {
     pub binaries: Vec<String>,
     #[serde(default)]
     pub configs: Vec<String>,
-    /// Other managed entries this one depends on (ADR-005 interdependence).
+    /// Other managed entries this one depends on.
     #[serde(default)]
     pub entries: Vec<String>,
     /// Unrecognized `requires.*` keys, captured and surfaced (ADR-006).
@@ -116,7 +115,7 @@ impl Manifest {
     }
 }
 
-/// The deployment status of an entry, derived from the filesystem (ADR-005).
+/// The deployment status of an entry, derived from the filesystem.
 ///
 /// Internally tagged so it flattens into [`EntryState`] as a `status` field.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -186,8 +185,7 @@ pub fn deploy_status(entry: &Entry, repo_root: &Path, home: &Path) -> DeployStat
 ///
 /// The literal fallback is best-effort: it does not lexically normalize `..`/`.`
 /// in relative link targets, so an unusual relative symlink could be misjudged.
-/// Broken (dangling) links are handled by the caller; the gix-based status path
-/// (ADR-004, next slice) supersedes this hand-rolled resolution.
+/// Broken (dangling) links are handled by the caller.
 fn same_path(a: &Path, b: &Path) -> bool {
     match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
         (Ok(ca), Ok(cb)) => ca == cb,
@@ -195,7 +193,7 @@ fn same_path(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// An entry plus its derived deploy status — one row of the projection (ADR-005).
+/// An entry plus its derived deploy status — one row of the reported state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntryState {
     #[serde(flatten)]
@@ -204,9 +202,7 @@ pub struct EntryState {
     pub status: DeployStatus,
 }
 
-/// The derived dotfiles state both front-ends project (ADR-005).
-///
-/// v0.1: catalog + deploy status. Git status and concern-grouping land next.
+/// The derived dotfiles state the CLI reports: catalog + deploy status.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct State {
     pub entries: Vec<EntryState>,

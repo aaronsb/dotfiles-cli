@@ -1,6 +1,6 @@
 [package]
 name = "dotfiles-cli"
-description = "Non-interactive JSON surface for dotfiles-tui — the agent-facing front-end."
+description = "The dotfiles CLI — self-documenting, agent-native dotfiles management."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

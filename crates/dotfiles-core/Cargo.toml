@@ -1,6 +1,6 @@
 [package]
 name = "dotfiles-core"
-description = "Pure state model behind dotfiles-tui: manifest, deploy status, derived state."
+description = "Pure state model for the dotfiles CLI: manifest, deploy status, derived state."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

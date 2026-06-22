@@ -1,15 +1,15 @@
-//! `dotfiles-cli` — the non-interactive JSON surface (ADR-001 #4, ADR-004).
+//! `dotfiles-cli` — the sole surface (ADR-001 #4 as amended by ADR-007, ADR-004).
 //!
-//! The agent-facing front-end: fully scriptable, structured output. v0.1:
-//! `status` derives the dotfiles state (catalog + deploy status, ADR-005) and
-//! prints it as JSON.
+//! Scriptable, structured output; grows into a drop-in replacement for the bash
+//! `dotfiles` tool. `status` derives the dotfiles state (catalog + deploy status)
+//! and prints it as JSON.
 
 use clap::{Parser, Subcommand, ValueEnum};
 use dotfiles_core::{Manifest, State};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "dotfiles-cli", version, about = "Agent-facing surface for dotfiles-tui")]
+#[command(name = "dotfiles-cli", version, about = "Self-documenting dotfiles management")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
