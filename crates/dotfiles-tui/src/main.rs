@@ -110,12 +110,11 @@ fn ui(f: &mut Frame, app: &mut App) {
         .highlight_symbol("› ");
     f.render_stateful_widget(list, list_area, &mut app.list_state);
 
-    // Detail / why pane.
+    // Detail pane: identity + status + why + (optional) spec.
     let detail = match app.selected() {
         Some(es) => {
             let (label, color) = status_view(&es.status);
-            let why = es.entry.why.as_deref().unwrap_or("(no rationale recorded)");
-            Text::from(vec![
+            let mut lines: Vec<Line> = vec![
                 Line::from(Span::styled(
                     es.entry.name.clone(),
                     Style::default().add_modifier(Modifier::BOLD),
@@ -128,10 +127,65 @@ fn ui(f: &mut Frame, app: &mut App) {
                     Span::raw("status  "),
                     Span::styled(label, Style::default().fg(color)),
                 ]),
-                Line::raw(""),
-                Line::from(Span::styled("why", Style::default().add_modifier(Modifier::DIM))),
-                Line::raw(why.to_string()),
-            ])
+            ];
+
+            if let Some(why) = es.entry.why.as_deref() {
+                lines.push(Line::raw(""));
+                lines.push(Line::from(Span::styled("why", Style::default().add_modifier(Modifier::DIM))));
+                lines.push(Line::raw(why.to_string()));
+            }
+
+            if let Some(spec) = &es.entry.spec {
+                lines.push(Line::raw(""));
+                lines.push(Line::from(Span::styled("spec", Style::default().add_modifier(Modifier::DIM))));
+                if let Some(s) = &spec.summary {
+                    lines.push(Line::raw(format!("  summary  {s}")));
+                }
+                if let Some(c) = &spec.concern {
+                    lines.push(Line::raw(format!("  concern  {c}")));
+                }
+                if let Some(p) = &spec.platform {
+                    lines.push(Line::raw(format!("  platform {p}")));
+                }
+                if !spec.tags.is_empty() {
+                    lines.push(Line::raw(format!("  tags     {}", spec.tags.join(", "))));
+                }
+                if !spec.provides.is_empty() {
+                    lines.push(Line::raw(format!("  provides {}", spec.provides.join(", "))));
+                }
+                if !spec.depends.is_empty() {
+                    lines.push(Line::raw(format!("  depends  {}", spec.depends.join(", "))));
+                }
+                if let Some(req) = &spec.requires {
+                    for (label, v) in [
+                        ("pkg", &req.packages),
+                        ("grp", &req.groups),
+                        ("bin", &req.binaries),
+                        ("cfg", &req.configs),
+                        ("ent", &req.entries),
+                    ] {
+                        if !v.is_empty() {
+                            lines.push(Line::raw(format!("  needs {label}  {}", v.join(", "))));
+                        }
+                    }
+                    if !req.extra.is_empty() {
+                        let keys: Vec<&str> = req.extra.keys().map(String::as_str).collect();
+                        lines.push(Line::from(Span::styled(
+                            format!("  requires.? {}", keys.join(", ")),
+                            Style::default().fg(Color::Yellow),
+                        )));
+                    }
+                }
+                if !spec.extra.is_empty() {
+                    let keys: Vec<&str> = spec.extra.keys().map(String::as_str).collect();
+                    lines.push(Line::from(Span::styled(
+                        format!("  unrecognized: {}", keys.join(", ")),
+                        Style::default().fg(Color::Yellow),
+                    )));
+                }
+            }
+
+            Text::from(lines)
         }
         None => Text::raw("no entries"),
     };
@@ -197,7 +251,7 @@ fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dotfiles_core::{Entry, Mode};
+    use dotfiles_core::{Entry, Mode, Spec};
 
     fn state_with(n: usize) -> State {
         State {
@@ -243,8 +297,12 @@ mod tests {
         let mut app = App::new(state_with(2));
         app.state.entries[0].entry.name = "zsh".into();
         app.state.entries[0].entry.why = Some("shell baseline".into());
+        app.state.entries[0].entry.spec = Some(Spec {
+            concern: Some("terminal-bootstrap".into()),
+            ..Default::default()
+        });
 
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         terminal.draw(|f| ui(f, &mut app)).unwrap();
 
         let content: String = terminal
@@ -259,5 +317,6 @@ mod tests {
         assert!(content.contains("zsh"), "entry name rendered");
         assert!(content.contains("linked"), "deploy status rendered");
         assert!(content.contains("shell baseline"), "why docstring rendered");
+        assert!(content.contains("terminal-bootstrap"), "spec concern rendered");
     }
 }
