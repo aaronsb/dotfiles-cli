@@ -1,0 +1,12 @@
+[package]
+name = "dotfiles-core"
+description = "Pure state model behind dotfiles-tui: manifest, deploy status, derived state."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+toml.workspace = true
