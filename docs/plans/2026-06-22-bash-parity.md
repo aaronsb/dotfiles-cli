@@ -88,6 +88,25 @@ harness script is committed and is the living proof of parity.
    install scripts, drop the submodule (`.gitmodules` now untracked; gitignore the
    nested `dotfiles-cli/` source dir in `.dotfiles`).
 
+## Retiring `dotfiles-bash` (the endgame — less surface to maintain)
+
+`dotfiles-bash` is a temporary fallback. Nothing functional blocks its removal:
+the 10 daily/git/pkg verbs are convergence-proven, and install/update are covered
+by `install.sh` (re-run to update). It stays only as a safety net until the Rust
+CLI is proven in real daily use. When that confidence is there, removal is one
+cleanup commit in `~/.dotfiles`:
+
+- delete `dotfiles-bash` and `lib/{common,configs,git,pkg,lifecycle}.sh`;
+- delete the legacy pipe `.dotfiles-manifest` (the TOML manifest is now primary);
+- fold anything still useful from `HELP.md` into the Rust `--help` / README, then
+  drop it;
+- remove the `~/.local/bin/dotfiles-bash` symlink;
+- keep `scripts/converge.sh` for the historical record, or retire it too once the
+  comparison target is gone.
+
+Until then the convergence harness is the proof mechanism; run it whenever the
+Rust tool changes.
+
 ## Pointers
 
 - Bash source of truth: `~/.dotfiles/{dotfiles,lib/*.sh}`; pkg = `lib/pkg.sh`.
