@@ -9,6 +9,7 @@ mod commands;
 mod diff_view;
 mod pkg;
 mod profile;
+mod show;
 mod table;
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
@@ -76,6 +77,8 @@ enum Command {
     Remove { app: String },
     /// List every managed dotfile.
     List,
+    /// Show one dotfile in full: rationale, structured spec, and deploy state.
+    Show { app: String },
     /// Commit and push the dotfiles repo to origin.
     Push {
         /// Commit message / rationale. Required when there are uncommitted changes.
@@ -227,6 +230,10 @@ fn main() -> anyhow::Result<()> {
             let ctx = Ctx::resolve(&cli)?;
             list(&ctx)?;
         }
+        Command::Show { app } => {
+            let ctx = Ctx::resolve(&cli)?;
+            show::run(&ctx, app)?;
+        }
         Command::Deploy { dry_run, force } => {
             let ctx = Ctx::resolve(&cli)?;
             commands::deploy(&ctx, *dry_run, *force)?;
@@ -349,7 +356,7 @@ fn status(ctx: &Ctx, format: Format) -> anyhow::Result<()> {
 }
 
 /// Presentation label + color for a deploy status (human format only).
-fn status_view(s: &DeployStatus, enabled: bool) -> (&'static str, &'static str) {
+pub(crate) fn status_view(s: &DeployStatus, enabled: bool) -> (&'static str, &'static str) {
     if !enabled {
         return ("disabled", table::DIM);
     }
