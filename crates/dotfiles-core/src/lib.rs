@@ -9,18 +9,22 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// How an entry is deployed (ADR-001 #1).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
     /// Symlink the target to the source in the repo (default).
+    #[default]
     Symlink,
     /// Recursively copy — for directories like nested git repos.
     Copy,
 }
 
-impl Default for Mode {
-    fn default() -> Self {
-        Mode::Symlink
+impl std::fmt::Display for Mode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Mode::Symlink => "symlink",
+            Mode::Copy => "copy",
+        })
     }
 }
 
@@ -74,6 +78,9 @@ pub enum DeployStatus {
     WrongTarget { points_to: String },
     /// Target exists but is not the symlink we expect (a real file/dir).
     Conflict,
+    /// Symlink points at the expected source, but that source is missing
+    /// (a dangling link).
+    Broken,
     /// Copy-mode target exists (content drift not yet checked).
     Present,
     /// Target does not exist.
@@ -106,7 +113,12 @@ pub fn deploy_status(entry: &Entry, repo_root: &Path, home: &Path) -> DeployStat
             target.parent().unwrap_or(home).join(link)
         };
         if same_path(&resolved, &expected) {
-            DeployStatus::Linked
+            // Points at the expected source — but is that source actually there?
+            if target.exists() {
+                DeployStatus::Linked
+            } else {
+                DeployStatus::Broken
+            }
         } else {
             DeployStatus::WrongTarget { points_to: resolved.display().to_string() }
         }
@@ -119,7 +131,13 @@ pub fn deploy_status(entry: &Entry, repo_root: &Path, home: &Path) -> DeployStat
     }
 }
 
-/// Compare two paths, preferring canonicalized equality, falling back to literal.
+/// Compare two paths, preferring canonicalized equality, falling back to a
+/// literal comparison when canonicalize fails (e.g. a missing source).
+///
+/// The literal fallback is best-effort: it does not lexically normalize `..`/`.`
+/// in relative link targets, so an unusual relative symlink could be misjudged.
+/// Broken (dangling) links are handled by the caller; the gix-based status path
+/// (ADR-004, next slice) supersedes this hand-rolled resolution.
 fn same_path(a: &Path, b: &Path) -> bool {
     match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
         (Ok(ca), Ok(cb)) => ca == cb,
@@ -239,6 +257,10 @@ mod tests {
 
         symlink(repo.join("zsh/.zshrc"), home.join(".zshrc")).unwrap();
         assert_eq!(deploy_status(&entry, &repo, &home), DeployStatus::Linked);
+
+        // Source removed out from under the link -> dangling -> Broken.
+        std::fs::remove_file(repo.join("zsh/.zshrc")).unwrap();
+        assert_eq!(deploy_status(&entry, &repo, &home), DeployStatus::Broken);
 
         std::fs::remove_dir_all(&base).ok();
     }

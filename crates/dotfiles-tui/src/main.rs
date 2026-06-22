@@ -77,6 +77,7 @@ fn status_view(s: &DeployStatus) -> (&'static str, Color) {
         DeployStatus::Present => ("present", Color::Green),
         DeployStatus::Missing => ("missing", Color::Yellow),
         DeployStatus::Conflict => ("conflict", Color::Red),
+        DeployStatus::Broken => ("broken", Color::Red),
         DeployStatus::WrongTarget { .. } => ("wrong-target", Color::Red),
         DeployStatus::Error { .. } => ("error", Color::Red),
     }
@@ -122,7 +123,7 @@ fn ui(f: &mut Frame, app: &mut App) {
                 Line::raw(""),
                 Line::raw(format!("target  {}", es.entry.target)),
                 Line::raw(format!("source  {}", es.entry.path)),
-                Line::raw(format!("mode    {:?}", es.entry.mode).to_lowercase()),
+                Line::raw(format!("mode    {}", es.entry.mode)),
                 Line::from(vec![
                     Span::raw("status  "),
                     Span::styled(label, Style::default().fg(color)),
