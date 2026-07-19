@@ -1,7 +1,7 @@
 //! `dotfiles claude` — read and write Claude Code's user-scope settings.
 //!
 //! Config lives as **numbered JSON fragments** (the zshrc `conf.d` shape) under
-//! `<store>/claude/settings.d/`, merged in filename order, with an optional
+//! `<store>/claude/settings.d/`, deep-merged in filename order with an optional
 //! per-profile overlay under `profiles/<profile>/`. The compiled slice is the
 //! *owned* portion of `~/.claude/settings.json`; [`dotfiles_core::settings_project`]
 //! projects it in via a three-way merge that preserves every foreign key
@@ -12,10 +12,19 @@
 
 use crate::Ctx;
 use clap::{Args, Subcommand};
-use dotfiles_core::settings_merge::OwnedSlice;
+use dotfiles_core::settings_merge::{self, OwnedSlice};
 use dotfiles_core::settings_project as sp;
 use serde_json::{Map, Value, json};
-use std::path::PathBuf;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+
+/// The shared concat-list paths — additive-union, not whole-object owned. Every
+/// other leaf a fragment declares is owned exclusively.
+const UNION_LISTS: [&str; 2] = ["permissions.allow", "permissions.deny"];
+
+fn is_union_list(path: &str) -> bool {
+    UNION_LISTS.contains(&path)
+}
 
 #[derive(Args)]
 pub struct ClaudeArgs {
@@ -35,7 +44,7 @@ enum ClaudeCmd {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Set a managed config item, then project (e.g. `set model opus`, or
+    /// Set a managed config item, then project (e.g. `set env.FOO bar`, or
     /// `set permissions.allow '["Bash(git:*)"]'`). Value is parsed as JSON,
     /// falling back to a string.
     Set { key: String, value: String },
@@ -74,8 +83,9 @@ fn manual_fragment(ctx: &Ctx) -> PathBuf {
     store_dir(ctx).join("50-manual.json")
 }
 
-/// Read every `*.json` fragment in a directory, sorted by filename.
-fn read_fragments(dir: &std::path::Path) -> anyhow::Result<Vec<Value>> {
+/// Read every `*.json` fragment in a directory, sorted by filename, paired with
+/// its path (for validation error messages).
+fn read_fragments(dir: &Path) -> anyhow::Result<Vec<(PathBuf, Value)>> {
     let mut paths: Vec<PathBuf> = match std::fs::read_dir(dir) {
         Ok(rd) => rd
             .filter_map(|e| e.ok().map(|e| e.path()))
@@ -88,106 +98,146 @@ fn read_fragments(dir: &std::path::Path) -> anyhow::Result<Vec<Value>> {
     let mut out = Vec::new();
     for p in paths {
         let v = sp::read_json_or_empty(&p).map_err(|e| anyhow::anyhow!(e))?;
-        out.push(v);
+        out.push((p, v));
     }
     Ok(out)
 }
 
-/// Compile the store into the owned slice: L2 universal fragments in filename
-/// order, then the L3 per-profile overlay. Returns the merged `ours` value.
+/// Reject a malformed fragment with a clean error rather than a later panic: the
+/// shared concat-lists must be arrays.
+fn validate_fragment(frag: &Value, path: &Path) -> anyhow::Result<()> {
+    if let Some(perms) = frag.get("permissions").and_then(|p| p.as_object()) {
+        for key in ["allow", "deny"] {
+            if let Some(v) = perms.get(key)
+                && !v.is_array()
+            {
+                anyhow::bail!(
+                    "{}: permissions.{key} must be a JSON array (got {})",
+                    path.display(),
+                    kind(v)
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn kind(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+/// Compile the store into the owned config: L2 universal fragments in filename
+/// order, then the L3 per-profile overlay, deep-merged. Returns the merged `ours`.
 fn load_store(ctx: &Ctx) -> anyhow::Result<Value> {
     let dir = store_dir(ctx);
     let mut acc = Map::new();
-    for frag in read_fragments(&dir)? {
-        merge_fragment(&mut acc, &frag);
+    for (path, frag) in read_fragments(&dir)? {
+        validate_fragment(&frag, &path)?;
+        if let Some(obj) = frag.as_object() {
+            deep_merge(&mut acc, obj, "");
+        }
     }
     // L3: per-profile overlay wins over universal.
     let profile_dir = dir.join("profiles").join(&ctx.profile);
-    for frag in read_fragments(&profile_dir)? {
-        merge_fragment(&mut acc, &frag);
+    for (path, frag) in read_fragments(&profile_dir)? {
+        validate_fragment(&frag, &path)?;
+        if let Some(obj) = frag.as_object() {
+            deep_merge(&mut acc, obj, "");
+        }
     }
     Ok(Value::Object(acc))
 }
 
-/// Merge one fragment into the accumulator: last-wins on scalars/objects, but
-/// `permissions.allow` / `permissions.deny` union (they are shared concat-lists).
-fn merge_fragment(acc: &mut Map<String, Value>, frag: &Value) {
-    let Some(obj) = frag.as_object() else { return };
-    for (key, val) in obj {
-        if key == "permissions" {
-            let perms = acc.entry("permissions").or_insert_with(|| json!({}));
-            merge_permissions(perms, val);
+/// Deep-merge `overlay` into `acc`: objects recurse (so a partial fragment adds a
+/// sub-key without wiping its siblings), the shared concat-lists union, and every
+/// other leaf is last-wins.
+fn deep_merge(acc: &mut Map<String, Value>, overlay: &Map<String, Value>, prefix: &str) {
+    for (key, val) in overlay {
+        let path = if prefix.is_empty() { key.clone() } else { format!("{prefix}.{key}") };
+        if is_union_list(&path) {
+            // Validated as an array upstream; union it in.
+            let entry = acc.entry(key.clone()).or_insert_with(|| json!([]));
+            if let (Some(list), Some(items)) = (entry.as_array_mut(), val.as_array()) {
+                for item in items {
+                    if !list.contains(item) {
+                        list.push(item.clone());
+                    }
+                }
+            }
+        } else if let Some(vo) = val.as_object() {
+            let child = acc.entry(key.clone()).or_insert_with(|| json!({}));
+            if !child.is_object() {
+                *child = json!({});
+            }
+            deep_merge(child.as_object_mut().expect("just ensured object"), vo, &path);
         } else {
             acc.insert(key.clone(), val.clone());
         }
     }
 }
 
-fn merge_permissions(acc: &mut Value, frag: &Value) {
-    if !acc.is_object() {
-        *acc = json!({});
-    }
-    let acc = acc.as_object_mut().expect("just ensured object");
-    let Some(obj) = frag.as_object() else { return };
+/// Collect the dotted **leaf** paths of a config value — recursing into objects,
+/// skipping the shared concat-lists (handled as union lists).
+fn leaf_paths(value: &Value, prefix: &str, out: &mut Vec<String>) {
+    let Some(obj) = value.as_object() else { return };
     for (key, val) in obj {
-        if (key == "allow" || key == "deny") && val.is_array() {
-            let entry = acc.entry(key.clone()).or_insert_with(|| json!([]));
-            let list = entry.as_array_mut().expect("array");
-            for item in val.as_array().unwrap() {
-                if !list.contains(item) {
-                    list.push(item.clone());
-                }
-            }
+        let path = if prefix.is_empty() { key.clone() } else { format!("{prefix}.{key}") };
+        if is_union_list(&path) {
+            continue;
+        }
+        if val.is_object() {
+            leaf_paths(val, &path, out);
         } else {
-            acc.insert(key.clone(), val.clone());
+            out.push(path); // scalar or non-union array = an owned leaf
         }
     }
 }
 
 /// Derive the owned slice spanning **both** the currently-declared config and the
-/// prior base. Covering base keys is essential: a key the operator just removed
-/// from the store is gone from `ours` but still recorded in `base`, and the merge
-/// only drops (relinquishes) a key it still counts as owned. Top-level keys are
-/// exclusive; `permissions.allow`/`permissions.deny` are shared additive-union
-/// lists.
+/// prior base. Covering base leaves is essential: a leaf the operator just removed
+/// is absent from `ours` but still in `base`, and the merge only relinquishes a
+/// leaf it still counts as owned.
 fn slice_over(ours: &Value, base: &Value) -> OwnedSlice {
-    let mut slice = OwnedSlice::default();
-    let mut seen_excl = std::collections::BTreeSet::new();
-    let mut seen_list = std::collections::BTreeSet::new();
+    let mut exclusive = Vec::new();
+    let mut seen = BTreeSet::new();
     for source in [ours, base] {
-        let Some(obj) = source.as_object() else { continue };
-        for key in obj.keys() {
-            if key == "permissions" {
-                let Some(perms) = obj["permissions"].as_object() else { continue };
-                for sub in ["allow", "deny"] {
-                    if perms.contains_key(sub) {
-                        let path = format!("permissions.{sub}");
-                        if seen_list.insert(path.clone()) {
-                            slice.union_lists.push(path);
-                        }
-                    }
-                }
-            } else if seen_excl.insert(key.clone()) {
-                slice.exclusive.push(key.clone());
+        let mut paths = Vec::new();
+        leaf_paths(source, "", &mut paths);
+        for p in paths {
+            if seen.insert(p.clone()) {
+                exclusive.push(p);
             }
         }
     }
-    slice
+    let mut union_lists = Vec::new();
+    for ul in UNION_LISTS {
+        if (sp::get(ours, ul).is_some() || sp::get(base, ul).is_some())
+            && !union_lists.contains(&ul.to_string())
+        {
+            union_lists.push(ul.to_string());
+        }
+    }
+    OwnedSlice { exclusive, union_lists }
 }
 
-/// The owned slice of the currently-declared config alone (no base) — for `show`,
-/// which reports what is managed now, not what is being relinquished.
+/// The owned slice of the currently-declared config alone (no base) — for `show`.
 fn derive_slice(ours: &Value) -> OwnedSlice {
     slice_over(ours, &Value::Null)
 }
 
 fn get(ctx: &Ctx, key: &str) -> anyhow::Result<()> {
-    let live = sp::read_json_or_empty(&sp::settings_path(&ctx.home)).map_err(|e| anyhow::anyhow!(e))?;
+    let live =
+        sp::read_json_or_empty(&sp::settings_path(&ctx.home)).map_err(|e| anyhow::anyhow!(e))?;
     match sp::get(&live, key) {
         Some(v) => println!("{}", serde_json::to_string_pretty(&v)?),
-        None => {
-            println!("{key}: not set");
-        }
+        None => println!("{key}: not set"),
     }
     Ok(())
 }
@@ -195,29 +245,46 @@ fn get(ctx: &Ctx, key: &str) -> anyhow::Result<()> {
 fn show(ctx: &Ctx) -> anyhow::Result<()> {
     let ours = load_store(ctx)?;
     let slice = derive_slice(&ours);
-    let live = sp::read_json_or_empty(&sp::settings_path(&ctx.home)).map_err(|e| anyhow::anyhow!(e))?;
+    let live =
+        sp::read_json_or_empty(&sp::settings_path(&ctx.home)).map_err(|e| anyhow::anyhow!(e))?;
     println!("Managed Claude settings — profile: {}", ctx.profile);
     println!("  store: {}", store_dir(ctx).display());
     println!("  file:  {}", sp::settings_path(&ctx.home).display());
     println!();
-    let owned_keys: Vec<String> =
-        slice.exclusive.iter().cloned().chain(slice.union_lists.iter().cloned()).collect();
-    if owned_keys.is_empty() {
+    if slice.exclusive.is_empty() && slice.union_lists.is_empty() {
         println!("  (no managed keys — add fragments under the store dir, or `dotfiles claude set`)");
         return Ok(());
     }
-    for key in owned_keys {
-        let declared = sp::get(&ours, &key);
-        let livev = sp::get(&live, &key);
-        let synced = declared == livev;
-        let mark = if synced { "=" } else { "≠" };
-        println!("  {mark} {key}");
-        if let Some(d) = declared {
-            println!("      declared: {}", compact(&d));
-        }
-        println!("      live:     {}", livev.map(|v| compact(&v)).unwrap_or_else(|| "(unset)".into()));
+    for path in &slice.exclusive {
+        let declared = sp::get(&ours, path);
+        let livev = sp::get(&live, path);
+        // A leaf is synced when its live value equals what we declare.
+        print_row(declared == livev, path, declared, livev);
+    }
+    for path in &slice.union_lists {
+        let declared = sp::get(&ours, path);
+        let livev = sp::get(&live, path);
+        // A shared list is synced when every declared entry is present live (the
+        // live list also carries foreign entries, so equality would never hold).
+        let synced = match (&declared, &livev) {
+            (Some(Value::Array(d)), Some(Value::Array(l))) => d.iter().all(|e| l.contains(e)),
+            (None, _) => true,
+            _ => false,
+        };
+        print_row(synced, path, declared, livev);
     }
     Ok(())
+}
+
+fn print_row(synced: bool, key: &str, declared: Option<Value>, live: Option<Value>) {
+    println!("  {} {key}", if synced { "=" } else { "≠" });
+    if let Some(d) = declared {
+        println!("      declared: {}", compact(&d));
+    }
+    println!(
+        "      live:     {}",
+        live.map(|v| compact(&v)).unwrap_or_else(|| "(unset)".into())
+    );
 }
 
 /// A one-line JSON rendering for the `show` table.
@@ -229,28 +296,32 @@ fn project(ctx: &Ctx, dry_run: bool) -> anyhow::Result<()> {
     let ours = load_store(ctx)?;
     let settings = sp::settings_path(&ctx.home);
     let base_path = sp::base_path(&ctx.home);
-    // Span the slice over ours + the prior base so a removed key is relinquished,
-    // not silently left behind.
+    // Read the base once here — both to span the slice over ours + base (so a
+    // removed leaf is relinquished) and to hand to the projector.
     let base = sp::read_json_or_empty(&base_path).map_err(|e| anyhow::anyhow!(e))?;
     let slice = slice_over(&ours, &base);
-    let out = sp::project(&slice, &ours, &settings, &base_path, dry_run).map_err(|e| anyhow::anyhow!(e))?;
-    if dry_run {
-        if out.changed {
-            println!("would update {} (dry-run)", settings.display());
-        } else {
-            println!("{} already up to date", settings.display());
-        }
-    } else if out.changed {
-        println!("updated {}", settings.display());
-    } else {
-        println!("{} already up to date", settings.display());
+    let out = sp::project(&slice, &ours, &settings, &base, &base_path, dry_run)
+        .map_err(|e| anyhow::anyhow!(e))?;
+    match (dry_run, out.changed) {
+        (true, true) => println!("would update {} (dry-run)", settings.display()),
+        (false, true) => println!("updated {}", settings.display()),
+        (_, false) => println!("{} already up to date", settings.display()),
     }
     Ok(())
 }
 
 fn set(ctx: &Ctx, key: &str, value: &str) -> anyhow::Result<()> {
     // Parse the value as JSON, falling back to a bare string.
-    let parsed: Value = serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.to_string()));
+    let parsed: Value =
+        serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.to_string()));
+    // A shared concat-list must be an array — otherwise the merge would treat our
+    // contribution as empty and strip every previously-owned entry.
+    if is_union_list(key) && !parsed.is_array() {
+        anyhow::bail!(
+            "{key} is a list — pass a JSON array, e.g. '[\"Bash(git:*)\"]' (got {})",
+            kind(&parsed)
+        );
+    }
     let frag_path = manual_fragment(ctx);
     let mut frag = sp::read_json_or_empty(&frag_path).map_err(|e| anyhow::anyhow!(e))?;
     set_dotted(&mut frag, key, Some(parsed));
@@ -265,43 +336,24 @@ fn unset(ctx: &Ctx, key: &str) -> anyhow::Result<()> {
     set_dotted(&mut frag, key, None);
     sp::atomic_write_json(&frag_path, &frag).map_err(|e| anyhow::anyhow!(e))?;
     println!("unset {key} in {}", frag_path.display());
+    // `unset` only edits the manual fragment; if another fragment still declares
+    // the key, it stays managed. Say so rather than implying it was removed.
+    if sp::get(&load_store(ctx)?, key).is_some() {
+        println!("note: {key} is still declared in another fragment — it remains managed");
+    }
     project(ctx, false)
 }
 
-/// Set (or, with `None`, remove) a dotted key in a JSON object, creating
-/// intermediate objects and pruning emptied ones on removal.
+/// Set (or, with `None`, remove) a dotted key in a JSON object, reusing the core
+/// path helpers so the descend/prune logic lives in one place.
 fn set_dotted(root: &mut Value, dotted: &str, value: Option<Value>) {
     if !root.is_object() {
         *root = json!({});
     }
-    let segs: Vec<&str> = dotted.split('.').collect();
-    set_dotted_inner(root.as_object_mut().unwrap(), &segs, value);
-}
-
-fn set_dotted_inner(obj: &mut Map<String, Value>, segs: &[&str], value: Option<Value>) {
-    let (head, rest) = segs.split_first().expect("non-empty path");
-    if rest.is_empty() {
-        match value {
-            Some(v) => {
-                obj.insert(head.to_string(), v);
-            }
-            None => {
-                obj.remove(*head);
-            }
-        }
-        return;
-    }
-    if value.is_none() && !obj.contains_key(*head) {
-        return; // nothing to remove
-    }
-    let child = obj.entry(head.to_string()).or_insert_with(|| json!({}));
-    if !child.is_object() {
-        *child = json!({});
-    }
-    let child_obj = child.as_object_mut().unwrap();
-    set_dotted_inner(child_obj, rest, value);
-    if child_obj.is_empty() {
-        obj.remove(*head);
+    let obj = root.as_object_mut().expect("just ensured object");
+    match value {
+        Some(v) => settings_merge::set_path(obj, dotted, v),
+        None => settings_merge::remove_path(obj, dotted),
     }
 }
 
@@ -310,54 +362,58 @@ mod tests {
     use super::*;
 
     #[test]
-    fn merge_fragment_unions_permissions_and_last_wins_scalars() {
+    fn deep_merge_recurses_objects_and_unions_permissions() {
+        // Regression (#1): a partial env fragment must not wipe sibling env vars.
         let mut acc = Map::new();
-        merge_fragment(&mut acc, &json!({ "model": "opus", "permissions": { "allow": ["a"] } }));
-        merge_fragment(&mut acc, &json!({ "model": "sonnet", "permissions": { "allow": ["b"] } }));
+        deep_merge(&mut acc, json!({ "env": { "A": "1" }, "permissions": { "allow": ["a"] } }).as_object().unwrap(), "");
+        deep_merge(&mut acc, json!({ "env": { "B": "2" }, "permissions": { "allow": ["b"] } }).as_object().unwrap(), "");
         let v = Value::Object(acc);
-        assert_eq!(v["model"], "sonnet"); // last wins
-        assert_eq!(v["permissions"]["allow"], json!(["a", "b"])); // union
+        assert_eq!(v["env"]["A"], "1", "sibling preserved");
+        assert_eq!(v["env"]["B"], "2");
+        assert_eq!(v["permissions"]["allow"], json!(["a", "b"]));
     }
 
     #[test]
-    fn derive_slice_classifies_keys() {
+    fn leaf_paths_recurse_and_skip_union_lists() {
         let ours = json!({
-            "statusLine": {}, "env": {},
-            "permissions": { "allow": ["a"], "deny": ["b"] }
+            "statusLine": { "command": "s" }, "env": { "A": "1", "B": "2" },
+            "permissions": { "allow": ["x"], "defaultMode": "acceptEdits" }
         });
-        let s = derive_slice(&ours);
-        assert!(s.exclusive.contains(&"statusLine".to_string()));
-        assert!(s.exclusive.contains(&"env".to_string()));
-        assert!(!s.exclusive.contains(&"permissions".to_string()));
+        let mut paths = Vec::new();
+        leaf_paths(&ours, "", &mut paths);
+        assert!(paths.contains(&"statusLine.command".to_string()));
+        assert!(paths.contains(&"env.A".to_string()) && paths.contains(&"env.B".to_string()));
+        // Regression (#7): permissions.defaultMode is an owned leaf, not dropped.
+        assert!(paths.contains(&"permissions.defaultMode".to_string()));
+        assert!(!paths.iter().any(|p| p == "permissions.allow"), "allow is a union list, not a leaf");
+    }
+
+    #[test]
+    fn slice_over_covers_base_only_leaves() {
+        let ours = json!({ "permissions": { "allow": ["Bash(dotfiles:*)"] } });
+        let base = json!({ "statusLine": { "command": "s.sh" }, "permissions": { "deny": ["x"] } });
+        let s = slice_over(&ours, &base);
+        assert!(s.exclusive.contains(&"statusLine.command".to_string()), "base-only leaf covered");
         assert!(s.union_lists.contains(&"permissions.allow".to_string()));
         assert!(s.union_lists.contains(&"permissions.deny".to_string()));
     }
 
     #[test]
-    fn slice_over_covers_base_only_keys() {
-        // Regression: a key the operator just removed is absent from `ours` but
-        // still in `base`; the slice must include it so the merge relinquishes it.
-        let ours = json!({ "permissions": { "allow": ["Bash(dotfiles:*)"] } });
-        let base = json!({ "statusLine": { "command": "s.sh" }, "permissions": { "deny": ["x"] } });
-        let s = slice_over(&ours, &base);
-        assert!(s.exclusive.contains(&"statusLine".to_string()), "base-only exclusive covered");
-        assert!(s.union_lists.contains(&"permissions.allow".to_string()));
-        assert!(s.union_lists.contains(&"permissions.deny".to_string()), "base-only list covered");
-        // And no duplicates when a key is in both.
-        let both = slice_over(&ours, &ours);
-        assert_eq!(both.union_lists.iter().filter(|p| *p == "permissions.allow").count(), 1);
+    fn validate_fragment_rejects_non_array_permission_list() {
+        // Regression (#5): a string allow is rejected cleanly, not panicked on later.
+        let err = validate_fragment(&json!({ "permissions": { "allow": "Bash(x:*)" } }), Path::new("f.json"));
+        assert!(err.is_err());
+        assert!(validate_fragment(&json!({ "permissions": { "allow": ["ok"] } }), Path::new("f.json")).is_ok());
     }
 
     #[test]
     fn set_and_unset_dotted() {
         let mut v = json!({});
-        set_dotted(&mut v, "permissions.allow", Some(json!(["x"])));
-        assert_eq!(v["permissions"]["allow"], json!(["x"]));
-        set_dotted(&mut v, "model", Some(json!("opus")));
-        assert_eq!(v["model"], "opus");
-        set_dotted(&mut v, "permissions.allow", None);
-        // permissions became empty -> pruned entirely.
-        assert!(v.get("permissions").is_none());
-        assert_eq!(v["model"], "opus");
+        set_dotted(&mut v, "env.FOO", Some(json!("bar")));
+        assert_eq!(v["env"]["FOO"], "bar");
+        set_dotted(&mut v, "env.BAZ", Some(json!("qux")));
+        set_dotted(&mut v, "env.FOO", None);
+        assert!(v["env"].get("FOO").is_none());
+        assert_eq!(v["env"]["BAZ"], "qux", "sibling survives removal");
     }
 }

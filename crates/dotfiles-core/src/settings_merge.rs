@@ -1,5 +1,5 @@
 //! Pure three-way merge for the Claude `~/.claude/settings.json` projector
-//! (ADR-010). No I/O — this is the portable algorithm, ported from agent-ways'
+//! (ADR-010). No I/O — the portable algorithm, ported from agent-ways'
 //! `settings_merge.rs` and the shared merge spec, so dotfiles-tui owns its own
 //! merger with no dependency on the `ways` binary (shared design lineage, not a
 //! shared dependency).
@@ -14,13 +14,16 @@
 //! operator's live toggles. The only safe design writes **only its owned slice**,
 //! preserves everything else exactly, and proves it did (see [`stripped_user_view`]).
 //!
-//! # Ownership
+//! # Ownership — leaf paths, not whole objects
 //!
-//! This projector owns no `hooks` (agent-ways keeps those), so — unlike the
-//! reference — there is no keyed-collection / structural-backstop machinery here.
-//! An owner declares an [`OwnedSlice`]: top-level keys it owns **exclusively**
-//! (scalar/object override) and dotted paths of **shared concat-lists** it
-//! contributes to (`permissions.allow`, `permissions.deny`) via additive union.
+//! A writer owns a set of **dotted leaf paths** (`env.FOO`, `statusLine.command`,
+//! `permissions.defaultMode`) plus a set of **shared concat-lists**
+//! (`permissions.allow`, `permissions.deny`). Owning leaves rather than whole
+//! objects is what lets the projector assert `env.FOO` while leaving a foreign
+//! `env.HTTP_PROXY` sibling untouched — and it keeps the self-audit honest, since a
+//! clobbered foreign sibling now shows up in the stripped user view. This projector
+//! owns no `hooks` (agent-ways keeps those), so there is no keyed-collection /
+//! structural-backstop machinery here.
 
 use serde_json::{Map, Value};
 
@@ -28,12 +31,14 @@ use serde_json::{Map, Value};
 /// preserved untouched.
 #[derive(Debug, Clone, Default)]
 pub struct OwnedSlice {
-    /// Top-level keys owned outright — exclusive scalar/object override. No other
-    /// writer may declare the same key (the coexistence contract, ADR-010).
+    /// Dotted **leaf** paths owned outright — exclusive scalar/array override
+    /// (`env.FOO`, `statusLine.command`). No other writer may declare the same
+    /// leaf (the coexistence contract, ADR-010).
     pub exclusive: Vec<String>,
-    /// Dotted paths of shared concat-lists this writer contributes to, e.g.
-    /// `"permissions.allow"`. Additive-union-with-deprecated-base-removal: the
-    /// writer adds and removes only entries its own base recorded.
+    /// Dotted paths of shared concat-lists this writer contributes to
+    /// (`permissions.allow`, `permissions.deny`). Additive-union-with-
+    /// deprecated-base-removal: the writer adds and removes only entries its own
+    /// base recorded.
     pub union_lists: Vec<String>,
 }
 
@@ -56,92 +61,94 @@ pub struct Merged {
     pub base: Value,
 }
 
-/// Split a dotted path (`"permissions.allow"`) into its segments. Flat keys yield
-/// a single segment.
-fn segments(path: &str) -> Vec<&str> {
-    path.split('.').collect()
-}
+// --- nested-path helpers (dotted keys over a JSON object) ---
 
-/// Read the array at a dotted `path` in `obj`, or an empty vec if absent / not an
-/// array.
-fn get_array(obj: &Map<String, Value>, path: &str) -> Vec<Value> {
-    let mut cur: &Value = &Value::Null;
-    let mut first = true;
-    for seg in segments(path) {
-        let map = if first {
-            first = false;
-            Some(obj)
-        } else {
-            cur.as_object()
-        };
-        match map.and_then(|m| m.get(seg)) {
-            Some(v) => cur = v,
-            None => return Vec::new(),
-        }
+/// Read the value at a dotted `path`. `None` if any segment is missing or a
+/// non-final segment is not an object.
+fn get_path<'a>(obj: &'a Map<String, Value>, path: &str) -> Option<&'a Value> {
+    let mut segs = path.split('.');
+    let first = segs.next()?;
+    let mut cur = obj.get(first)?;
+    for seg in segs {
+        cur = cur.as_object()?.get(seg)?;
     }
-    cur.as_array().cloned().unwrap_or_default()
+    Some(cur)
 }
 
-/// String view of a JSON array, dropping non-strings.
-fn as_strings(arr: &[Value]) -> Vec<String> {
-    arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+/// Set the value at a dotted `path`, creating intermediate objects and coercing a
+/// non-object intermediate to an object. Exposed for fragment authoring (`set`).
+pub fn set_path(obj: &mut Map<String, Value>, path: &str, value: Value) {
+    let segs: Vec<&str> = path.split('.').collect();
+    let (leaf, parents) = segs.split_last().expect("non-empty path");
+    let mut cur = obj;
+    for seg in parents {
+        let child = cur.entry((*seg).to_string()).or_insert_with(|| Value::Object(Map::new()));
+        if !child.is_object() {
+            *child = Value::Object(Map::new());
+        }
+        cur = child.as_object_mut().expect("just ensured object");
+    }
+    cur.insert((*leaf).to_string(), value);
 }
 
-/// Set (or, if empty, remove) the array at a dotted `path`, pruning parent objects
-/// that become empty.
-fn set_or_remove_array(obj: &mut Map<String, Value>, path: &str, entries: Vec<Value>) {
-    let segs = segments(path);
-    set_or_remove_inner(obj, &segs, entries);
+/// Remove the value at a dotted `path`, pruning any parent object left empty.
+/// Exposed for fragment authoring (`unset`).
+pub fn remove_path(obj: &mut Map<String, Value>, path: &str) {
+    let segs: Vec<&str> = path.split('.').collect();
+    remove_path_inner(obj, &segs);
 }
 
-fn set_or_remove_inner(obj: &mut Map<String, Value>, segs: &[&str], entries: Vec<Value>) {
+fn remove_path_inner(obj: &mut Map<String, Value>, segs: &[&str]) {
     let (head, rest) = segs.split_first().expect("non-empty path");
     if rest.is_empty() {
-        if entries.is_empty() {
-            obj.remove(*head);
-        } else {
-            obj.insert(head.to_string(), Value::Array(entries));
-        }
+        obj.remove(*head);
         return;
     }
-    // Descend, creating the child object if needed.
-    let child = obj.entry(head.to_string()).or_insert_with(|| Value::Object(Map::new()));
-    if !child.is_object() {
-        *child = Value::Object(Map::new());
+    if let Some(child) = obj.get_mut(*head).and_then(|v| v.as_object_mut()) {
+        remove_path_inner(child, rest);
+        if child.is_empty() {
+            obj.remove(*head);
+        }
     }
-    let child_obj = child.as_object_mut().expect("just ensured object");
-    set_or_remove_inner(child_obj, rest, entries);
-    // Prune an emptied parent so we never leave `{"permissions": {}}` behind.
-    if child_obj.is_empty() {
-        obj.remove(*head);
+}
+
+/// Read the array at a dotted `path`, or an empty vec if absent / not an array.
+/// Entries are kept as `Value`s (not coerced to strings) so a non-string foreign
+/// entry round-trips through merge and self-audit identically.
+fn get_array(obj: &Map<String, Value>, path: &str) -> Vec<Value> {
+    get_path(obj, path).and_then(|v| v.as_array()).cloned().unwrap_or_default()
+}
+
+/// Set (or, if empty, remove) the array at a dotted `path`, pruning empty parents.
+fn set_or_remove_array(obj: &mut Map<String, Value>, path: &str, entries: Vec<Value>) {
+    if entries.is_empty() {
+        remove_path(obj, path);
+    } else {
+        set_path(obj, path, Value::Array(entries));
     }
 }
 
 /// Three-way merge of `ours` into `live`, given the prior `base`. Pure and fully
 /// testable.
-///
-/// - `live` (theirs) — the current file, possibly with foreign edits.
-/// - `ours` — the slice we assert this run (a settings-shaped object holding only
-///   our owned keys).
-/// - `base` — what we wrote last run (empty on first run, or stale).
 pub fn merge(slice: &OwnedSlice, live: &Value, ours: &Value, base: &Value) -> Merged {
     let mut out = live.as_object().cloned().unwrap_or_default();
     let ours_obj = ours.as_object().cloned().unwrap_or_default();
     let base_obj = base.as_object().cloned().unwrap_or_default();
 
-    // --- exclusive scalar/object keys ---
-    for key in &slice.exclusive {
-        match ours_obj.get(key) {
-            // Assert (override an existing value, or adopt a foreign one).
-            Some(v) => {
-                out.insert(key.clone(), v.clone());
-            }
-            // We no longer assert it. If we wrote it last time, it is deprecated-ours
-            // — drop it (the operator removed the fragment). Otherwise it is foreign;
-            // leave it be.
+    // --- exclusive leaf paths ---
+    for path in &slice.exclusive {
+        match get_path(&ours_obj, path) {
+            // Assert (override an existing value, or adopt a foreign one). Only this
+            // leaf is touched, so foreign siblings in the same object survive.
+            Some(v) => set_path(&mut out, path, v.clone()),
+            // We no longer assert it. Relinquish it *only if the live value is still
+            // the one we wrote* (base == live). If a foreign writer changed it since,
+            // leave their value in place rather than deleting their edit.
             None => {
-                if base_obj.contains_key(key) {
-                    out.remove(key);
+                if get_path(&base_obj, path).is_some()
+                    && get_path(&out, path) == get_path(&base_obj, path)
+                {
+                    remove_path(&mut out, path);
                 }
             }
         }
@@ -149,22 +156,26 @@ pub fn merge(slice: &OwnedSlice, live: &Value, ours: &Value, base: &Value) -> Me
 
     // --- shared concat-lists: additive union with deprecated-base removal ---
     for path in &slice.union_lists {
-        let theirs = as_strings(&get_array(&out, path));
-        let ours_entries = as_strings(&get_array(&ours_obj, path));
-        let base_entries = as_strings(&get_array(&base_obj, path));
+        let theirs = get_array(&out, path);
+        let ours_entries = get_array(&ours_obj, path);
+        let base_entries = get_array(&base_obj, path);
 
-        // Entries we added before and no longer assert.
-        let deprecated: Vec<String> =
+        // Entries we added before and no longer assert. NOTE: under the disjoint-
+        // ownership contract (ADR-010/169) no entry is co-owned, so removing what our
+        // base recorded never revokes another writer's entry. If that contract is
+        // violated (two writers assert the same string), this removes a co-owned
+        // entry — an accepted bound of additive union, matching the reference.
+        let deprecated: Vec<Value> =
             base_entries.iter().filter(|e| !ours_entries.contains(e)).cloned().collect();
 
-        // Keep their entries except our deprecated ones and our current ones (the
-        // latter re-appended below — dropping first dedupes a re-apply).
+        // Keep their entries except our deprecated and current ones (current
+        // re-appended below — dropping first dedupes a re-apply). Value-based, so a
+        // non-string foreign entry is preserved, not silently coerced away.
         let mut result: Vec<Value> = theirs
             .into_iter()
             .filter(|e| !deprecated.contains(e) && !ours_entries.contains(e))
-            .map(Value::String)
             .collect();
-        result.extend(ours_entries.into_iter().map(Value::String));
+        result.extend(ours_entries);
 
         set_or_remove_array(&mut out, path, result);
     }
@@ -172,69 +183,58 @@ pub fn merge(slice: &OwnedSlice, live: &Value, ours: &Value, base: &Value) -> Me
     Merged { settings: Value::Object(out), base: base_for(slice, &ours_obj) }
 }
 
-/// The base to persist: exactly the slice we asserted this run (exclusive keys we
-/// set, plus our current list entries). Matches the reference: base records what we
-/// wrote, so next run's deprecated-removal and self-audit target precisely our slice.
+/// The base to persist: exactly the slice we asserted this run.
 fn base_for(slice: &OwnedSlice, ours_obj: &Map<String, Value>) -> Value {
     let mut base = Map::new();
-    for key in &slice.exclusive {
-        if let Some(v) = ours_obj.get(key) {
-            base.insert(key.clone(), v.clone());
+    for path in &slice.exclusive {
+        if let Some(v) = get_path(ours_obj, path) {
+            set_path(&mut base, path, v.clone());
         }
     }
     for path in &slice.union_lists {
-        let ours_entries = get_array(ours_obj, path);
-        if !ours_entries.is_empty() {
-            set_or_remove_array(&mut base, path, ours_entries);
+        let entries = get_array(ours_obj, path);
+        if !entries.is_empty() {
+            set_or_remove_array(&mut base, path, entries);
         }
     }
     Value::Object(base)
 }
 
-/// The user's portion of a settings doc: everything **except** the slice `base`
-/// says we own. Two docs with equal user-views differ only in our fields — the
-/// invariant the post-write self-audit asserts (write only your slice, prove it).
+/// The user's portion of a settings doc: everything **except** the leaves and list
+/// entries `base` says we own. Two docs with equal user-views differ only in our
+/// slice — the invariant the post-write self-audit asserts.
 pub fn stripped_user_view(slice: &OwnedSlice, settings: &Value, base: &Value) -> Value {
     let mut obj = settings.as_object().cloned().unwrap_or_default();
     let base_obj = base.as_object().cloned().unwrap_or_default();
 
-    // Strip our exclusive keys (only those the base says we wrote).
-    for key in &slice.exclusive {
-        if base_obj.contains_key(key) {
-            obj.remove(key);
+    for path in &slice.exclusive {
+        if get_path(&base_obj, path).is_some() {
+            remove_path(&mut obj, path);
         }
     }
-
-    // Strip our recorded entries from each shared list.
     for path in &slice.union_lists {
-        let owned = as_strings(&get_array(&base_obj, path));
+        let owned = get_array(&base_obj, path);
         if owned.is_empty() {
             continue;
         }
-        let kept: Vec<Value> = get_array(&obj, path)
-            .into_iter()
-            .filter(|v| v.as_str().map(|s| !owned.contains(&s.to_string())).unwrap_or(true))
-            .collect();
+        let kept: Vec<Value> =
+            get_array(&obj, path).into_iter().filter(|v| !owned.contains(v)).collect();
         set_or_remove_array(&mut obj, path, kept);
     }
-
     Value::Object(obj)
 }
 
-/// The union of two owned-slice bases: a base holding every exclusive key present
-/// in either, and, per shared list, the union of both sides' entries.
-///
-/// Used by the self-audit: to prove a projection touched nothing outside our slice,
-/// both the before and after documents are stripped by *this* union — so a key that
-/// moved in or out of the slice this run (an adopt or a relinquish) is removed from
-/// both, and the remaining user portion is compared honestly.
+/// The union of two owned-slice bases: every exclusive leaf present in either, and,
+/// per shared list, the union of both sides' entries. Used by the self-audit so a
+/// leaf that entered or left the slice this run is stripped from both before and
+/// after documents and does not trip a false alarm.
 pub fn owned_union(slice: &OwnedSlice, a: &Value, b: &Value) -> Value {
     let ao = a.as_object().cloned().unwrap_or_default();
     let bo = b.as_object().cloned().unwrap_or_default();
     let mut out = Map::new();
-    for key in &slice.exclusive {
-        if let Some(v) = ao.get(key).or_else(|| bo.get(key)) {
-            out.insert(key.clone(), v.clone());
+    for path in &slice.exclusive {
+        if let Some(v) = get_path(&ao, path).or_else(|| get_path(&bo, path)) {
+            set_path(&mut out, path, v.clone());
         }
     }
     for path in &slice.union_lists {
@@ -254,170 +254,125 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// The slice used across tests: dotfiles owns statusLine/attribution/env
-    /// exclusively and contributes to the two permission lists.
+    /// Leaf-path slice: two env vars + a statusLine field, plus the two lists.
     fn slice() -> OwnedSlice {
         OwnedSlice::new(
-            &["statusLine", "attribution", "env"],
+            &["statusLine.command", "env.FOO"],
             &["permissions.allow", "permissions.deny"],
         )
     }
 
-    fn allow(settings: &Value) -> Vec<String> {
-        as_strings(&get_array(settings.as_object().unwrap(), "permissions.allow"))
+    fn allow(settings: &Value) -> Vec<Value> {
+        get_array(settings.as_object().unwrap(), "permissions.allow")
     }
 
     #[test]
-    fn fresh_merge_adds_owned_keys_and_perms() {
-        let live = json!({});
+    fn fresh_merge_adds_owned_leaves_and_perms() {
         let ours = json!({
-            "statusLine": { "type": "command", "command": "s.sh" },
-            "permissions": { "allow": ["Bash(dotfiles:*)", "Bash(oh-my-posh:*)"] }
+            "statusLine": { "command": "s.sh" }, "env": { "FOO": "1" },
+            "permissions": { "allow": ["Bash(dotfiles:*)"] }
         });
-        let m = merge(&slice(), &live, &ours, &json!({}));
+        let m = merge(&slice(), &json!({}), &ours, &json!({}));
         assert_eq!(m.settings["statusLine"]["command"], "s.sh");
-        assert_eq!(allow(&m.settings), ["Bash(dotfiles:*)", "Bash(oh-my-posh:*)"]);
-        // Base records exactly what we asserted.
-        assert_eq!(m.base["statusLine"]["command"], "s.sh");
+        assert_eq!(m.settings["env"]["FOO"], "1");
+        assert_eq!(allow(&m.settings), vec![json!("Bash(dotfiles:*)")]);
     }
 
     #[test]
     fn merge_is_idempotent() {
-        let ours = json!({
-            "statusLine": { "command": "s.sh" },
-            "permissions": { "allow": ["Bash(dotfiles:*)"] }
-        });
+        let ours = json!({ "env": { "FOO": "1" }, "permissions": { "allow": ["Bash(dotfiles:*)"] } });
         let first = merge(&slice(), &json!({}), &ours, &json!({}));
         let second = merge(&slice(), &first.settings, &ours, &first.base);
         assert_eq!(first.settings, second.settings);
-        // No duplicate allow entry on re-apply.
-        assert_eq!(allow(&second.settings), ["Bash(dotfiles:*)"]);
     }
 
     #[test]
-    fn preserves_unrelated_user_and_foreign_keys() {
-        // model + a /config toggle + a user deny + another tool's allow entry.
+    fn owning_a_leaf_preserves_foreign_siblings() {
+        // Regression (#1/#5): we own env.FOO; a foreign env.HTTP_PROXY must survive,
+        // and the self-audit must see it (equal before/after).
+        let live = json!({ "env": { "FOO": "old", "HTTP_PROXY": "http://p" } });
+        let ours = json!({ "env": { "FOO": "new" } });
+        let m = merge(&slice(), &live, &ours, &json!({}));
+        assert_eq!(m.settings["env"]["FOO"], "new");
+        assert_eq!(m.settings["env"]["HTTP_PROXY"], "http://p", "foreign sibling preserved");
+        let before = stripped_user_view(&slice(), &live, &owned_union(&slice(), &json!({}), &ours));
+        let after = stripped_user_view(&slice(), &m.settings, &owned_union(&slice(), &json!({}), &ours));
+        assert_eq!(before, after, "self-audit sees the preserved sibling");
+    }
+
+    #[test]
+    fn relinquish_preserves_a_foreign_edit() {
+        // Regression (#3): we owned statusLine.command=X; a foreign writer changed it
+        // to Z; we drop the fragment. Z must survive, not be deleted.
+        let live = json!({ "statusLine": { "command": "Z" } });
+        let base = json!({ "statusLine": { "command": "X" } });
+        let m = merge(&slice(), &live, &json!({}), &base);
+        assert_eq!(m.settings["statusLine"]["command"], "Z", "foreign edit kept");
+    }
+
+    #[test]
+    fn relinquish_drops_our_unchanged_value() {
+        let live = json!({ "statusLine": { "command": "X" }, "model": "opus" });
+        let base = json!({ "statusLine": { "command": "X" } });
+        let m = merge(&slice(), &live, &json!({}), &base);
+        assert!(m.settings.get("statusLine").is_none(), "our own unchanged value dropped");
+        assert_eq!(m.settings["model"], "opus");
+    }
+
+    #[test]
+    fn preserves_unrelated_and_foreign_list_entries() {
         let live = json!({
-            "model": "opus",
-            "autoCompactEnabled": true,
-            "permissions": {
-                "allow": ["Bash(ways:*)"],           // agent-ways' entry
-                "deny": ["Read(~/.ssh/**)"]           // agent-ways' entry
-            }
+            "model": "opus", "autoCompactEnabled": true,
+            "permissions": { "allow": ["Bash(ways:*)"], "deny": ["Read(~/.ssh/**)"] }
         });
         let ours = json!({ "permissions": { "allow": ["Bash(dotfiles:*)"] } });
         let m = merge(&slice(), &live, &ours, &json!({}));
-        // Foreign scalars untouched.
         assert_eq!(m.settings["model"], "opus");
         assert_eq!(m.settings["autoCompactEnabled"], true);
-        // Other tool's allow entry survives; ours is appended.
-        assert_eq!(allow(&m.settings), ["Bash(ways:*)", "Bash(dotfiles:*)"]);
-        // Untouched foreign deny survives.
-        let deny = as_strings(&get_array(m.settings.as_object().unwrap(), "permissions.deny"));
-        assert_eq!(deny, ["Read(~/.ssh/**)"]);
+        assert_eq!(allow(&m.settings), vec![json!("Bash(ways:*)"), json!("Bash(dotfiles:*)")]);
+        assert_eq!(get_array(m.settings.as_object().unwrap(), "permissions.deny"), vec![json!("Read(~/.ssh/**)")]);
     }
 
     #[test]
     fn strips_previously_owned_deprecated_allow() {
-        // We used to assert an entry (base has it, live still carries it), now we
-        // don't. It must be removed; the user's own entry and our current one stay.
         let live = json!({ "permissions": {
             "allow": ["Bash(dotfiles:*)", "Bash(old-tool:*)", "Bash(user-thing:*)"]
         }});
         let base = json!({ "permissions": { "allow": ["Bash(old-tool:*)"] } });
         let ours = json!({ "permissions": { "allow": ["Bash(dotfiles:*)"] } });
         let m = merge(&slice(), &live, &ours, &base);
-        // Additive-union order: kept foreign entries first, then ours re-appended.
-        assert_eq!(allow(&m.settings), ["Bash(user-thing:*)", "Bash(dotfiles:*)"]);
+        assert_eq!(allow(&m.settings), vec![json!("Bash(user-thing:*)"), json!("Bash(dotfiles:*)")]);
     }
 
     #[test]
-    fn exclusive_override_and_idempotent() {
-        let live = json!({ "statusLine": { "command": "stale.sh" } });
-        let ours = json!({ "statusLine": { "command": "fresh.sh" } });
-        let base = json!({ "statusLine": { "command": "stale.sh" } });
-        let m = merge(&slice(), &live, &ours, &base);
-        assert_eq!(m.settings["statusLine"]["command"], "fresh.sh");
+    fn non_string_foreign_list_entry_is_preserved_no_lockout() {
+        // Regression (#6): a non-string foreign entry must survive merge AND stay in
+        // the stripped view, so before==after and the self-audit does not lock out.
+        let live = json!({ "permissions": { "allow": ["Bash(ways:*)", {"weird": true}] } });
+        let ours = json!({ "permissions": { "allow": ["Bash(dotfiles:*)"] } });
+        let audit = owned_union(&slice(), &json!({}), &ours);
+        let before = stripped_user_view(&slice(), &live, &audit);
+        let m = merge(&slice(), &live, &ours, &json!({}));
+        let after = stripped_user_view(&slice(), &m.settings, &audit);
+        assert!(allow(&m.settings).contains(&json!({"weird": true})), "non-string entry preserved");
+        assert_eq!(before, after, "no spurious self-audit divergence");
     }
 
     #[test]
-    fn adopt_foreign_object_no_gap() {
-        // Handoff: agent-ways left a live statusLine (foreign), our base is empty,
-        // our fragment asserts the same value. We adopt it with no gap, idempotently.
+    fn adopt_foreign_leaf_no_gap() {
         let live = json!({ "statusLine": { "command": "s.sh" } });
         let ours = json!({ "statusLine": { "command": "s.sh" } });
         let m = merge(&slice(), &live, &ours, &json!({}));
         assert_eq!(m.settings["statusLine"]["command"], "s.sh");
-        assert_eq!(m.base["statusLine"]["command"], "s.sh"); // base now seeded
-        // Second run is a no-op.
         let m2 = merge(&slice(), &m.settings, &ours, &m.base);
         assert_eq!(m.settings, m2.settings);
     }
 
     #[test]
-    fn relinquish_drops_opted_out_exclusive_keeps_foreign() {
-        // We owned statusLine (base has it); the operator removed the fragment so
-        // `ours` no longer asserts it -> drop it. A foreign key stays.
-        let live = json!({ "statusLine": { "command": "s.sh" }, "model": "opus" });
-        let base = json!({ "statusLine": { "command": "s.sh" } });
-        let ours = json!({});
-        let m = merge(&slice(), &live, &ours, &base);
-        assert!(m.settings.get("statusLine").is_none());
-        assert_eq!(m.settings["model"], "opus");
-    }
-
-    #[test]
     fn empty_list_removes_key_and_parent() {
-        // Our only deny entry is deprecated and nothing else remains -> the whole
-        // permissions object disappears rather than leaving `{}` or `[]`.
         let live = json!({ "permissions": { "deny": ["Read(~/.config/gh/**)"] } });
         let base = json!({ "permissions": { "deny": ["Read(~/.config/gh/**)"] } });
-        let ours = json!({});
-        let m = merge(&slice(), &live, &ours, &base);
+        let m = merge(&slice(), &live, &json!({}), &base);
         assert!(m.settings.get("permissions").is_none(), "emptied permissions pruned");
-    }
-
-    #[test]
-    fn deny_additive_union_preserves_user_entries() {
-        let live = json!({ "permissions": { "deny": ["Read(~/.aws/**)"] } });
-        let ours = json!({ "permissions": { "deny": ["Read(~/.config/gh/**)"] } });
-        let m = merge(&slice(), &live, &ours, &json!({}));
-        let deny = as_strings(&get_array(m.settings.as_object().unwrap(), "permissions.deny"));
-        assert_eq!(deny, ["Read(~/.aws/**)", "Read(~/.config/gh/**)"]);
-    }
-
-    #[test]
-    fn user_view_invariant_holds_across_merge() {
-        // The stripped user-view before and after a merge must be identical: we
-        // touched nothing outside our slice.
-        let live = json!({
-            "model": "opus",
-            "statusLine": { "command": "old.sh" },
-            "permissions": { "allow": ["Bash(ways:*)", "Bash(old-tool:*)"] }
-        });
-        let base = json!({
-            "statusLine": { "command": "old.sh" },
-            "permissions": { "allow": ["Bash(old-tool:*)"] }
-        });
-        let ours = json!({
-            "statusLine": { "command": "new.sh" },
-            "permissions": { "allow": ["Bash(dotfiles:*)"] }
-        });
-        let before = stripped_user_view(&slice(), &live, &base);
-        let m = merge(&slice(), &live, &ours, &base);
-        let after = stripped_user_view(&slice(), &m.settings, &m.base);
-        assert_eq!(before, after, "user view must be invariant under our merge");
-        // And the foreign entry genuinely survived in the merged doc.
-        assert!(allow(&m.settings).contains(&"Bash(ways:*)".to_string()));
-    }
-
-    #[test]
-    fn lost_base_does_not_duplicate_our_list_entries() {
-        // Base lost (empty) but live already carries our entry: additive union's
-        // `- ours` dedup means no duplicate on re-apply.
-        let live = json!({ "permissions": { "allow": ["Bash(dotfiles:*)"] } });
-        let ours = json!({ "permissions": { "allow": ["Bash(dotfiles:*)"] } });
-        let m = merge(&slice(), &live, &ours, &json!({}));
-        assert_eq!(allow(&m.settings), ["Bash(dotfiles:*)"]);
     }
 }

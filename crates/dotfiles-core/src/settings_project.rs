@@ -100,32 +100,37 @@ pub fn project_value(
     Ok(Projection { settings: m.settings, base: m.base, changed })
 }
 
-/// Full projection with I/O: read the live settings and base, merge + self-audit,
-/// and (unless `dry_run`) atomically write the settings and persist the new base.
+/// Full projection with I/O: read the live settings, merge against the caller-
+/// supplied `base` + self-audit, and (unless `dry_run`) atomically write the
+/// settings and persist the new base to `base_path`.
 ///
-/// The live file is backed up to a sibling `.json.bak` before an overwrite, so a
-/// bad projection is recoverable.
+/// The caller passes `base` (already read, so it can derive the owned slice from
+/// `ours` ∪ `base`) and `base_path` (where the new base is written). The live file
+/// is backed up to a sibling `.json.bak` before an overwrite — and if that backup
+/// cannot be written, the projection **aborts** rather than overwriting with no
+/// recovery copy.
 pub fn project(
     slice: &OwnedSlice,
     ours: &Value,
     settings_path: &Path,
+    base: &Value,
     base_path: &Path,
     dry_run: bool,
 ) -> Result<Projection, String> {
     let live = read_json_or_empty(settings_path)?;
-    let base = read_json_or_empty(base_path)?;
-    let out = project_value(slice, &live, ours, &base)?;
+    let out = project_value(slice, &live, ours, base)?;
     if !dry_run {
         if out.changed {
             if settings_path.exists() {
                 let bak = settings_path.with_extension("json.bak");
-                std::fs::copy(settings_path, &bak).ok();
+                std::fs::copy(settings_path, &bak)
+                    .map_err(|e| format!("backing up {}: {e}", settings_path.display()))?;
             }
             atomic_write_json(settings_path, &out.settings)?;
         }
         // Persist the base even when nothing changed: on first run over a
         // pre-existing install this seeds the base from the adopted values.
-        if out.base != base {
+        if &out.base != base {
             atomic_write_json(base_path, &out.base)?;
         }
     }
@@ -172,7 +177,8 @@ mod tests {
             "statusLine": { "command": "s.sh" },
             "permissions": { "allow": ["Bash(dotfiles:*)"] }
         });
-        let out = project(&slice(), &ours, &sp, &bp, false).unwrap();
+        let base = read_json_or_empty(&bp).unwrap();
+        let out = project(&slice(), &ours, &sp, &base, &bp, false).unwrap();
         assert!(out.changed);
 
         let written = read_json_or_empty(&sp).unwrap();
@@ -182,7 +188,8 @@ mod tests {
         assert_eq!(allow, json!(["Bash(ways:*)", "Bash(dotfiles:*)"]));
 
         // Base persisted; a second run is a no-op.
-        let out2 = project(&slice(), &ours, &sp, &bp, false).unwrap();
+        let base2 = read_json_or_empty(&bp).unwrap();
+        let out2 = project(&slice(), &ours, &sp, &base2, &bp, false).unwrap();
         assert!(!out2.changed);
 
         std::fs::remove_dir_all(&dir).ok();
@@ -195,7 +202,8 @@ mod tests {
         let sp = dir.join("settings.json");
         let bp = dir.join("base.json");
         let ours = json!({ "statusLine": { "command": "s.sh" } });
-        let out = project(&slice(), &ours, &sp, &bp, true).unwrap();
+        let base = read_json_or_empty(&bp).unwrap();
+        let out = project(&slice(), &ours, &sp, &base, &bp, true).unwrap();
         assert!(out.changed);
         assert!(!sp.exists(), "dry-run must not create the settings file");
         assert!(!bp.exists(), "dry-run must not create the base file");
@@ -217,5 +225,37 @@ mod tests {
         let ours = json!({ "permissions": { "allow": ["Bash(dotfiles:*)"] } });
         let out = project_value(&slice(), &live, &ours, &json!({})).unwrap();
         assert!(out.changed);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn aborts_without_overwriting_when_backup_fails() {
+        // Regression (#10): if the .bak backup cannot be written, the projection
+        // must error and leave settings.json untouched, not overwrite with no
+        // recovery copy.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tmp("bak");
+        std::fs::create_dir_all(&dir).unwrap();
+        let sp = dir.join("settings.json");
+        let bp = dir.join("base.json");
+        atomic_write_json(&sp, &json!({ "model": "opus" })).unwrap();
+        // Read-only dir: reads still work, but the .bak copy cannot be created.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+
+        let res = project(
+            &slice(),
+            &json!({ "statusLine": { "command": "s.sh" } }),
+            &sp,
+            &json!({}),
+            &bp,
+            false,
+        );
+
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(res.is_err(), "must abort when the backup cannot be written");
+        let after = read_json_or_empty(&sp).unwrap();
+        assert!(after.get("statusLine").is_none(), "settings.json must be left untouched");
+        assert_eq!(after["model"], "opus");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
