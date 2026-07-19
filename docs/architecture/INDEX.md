@@ -29,7 +29,8 @@ _Founding and cross-cutting decisions — tool existence, the shared manifest co
 | [ADR-007](./foundation/ADR-007-reduce-scope-to-a-self-documenting-schema-and-a-cli-retire-the-tui-and-projection.md) | Reduce scope to a self-documenting schema and a CLI; retire the TUI and projection | Accepted |
 | [ADR-008](./foundation/ADR-008-profiles-named-scopes-over-dotfiles-and-packages-per-machine-or-role.md) | Profiles — named scopes over dotfiles and packages, per machine or role | Accepted |
 | [ADR-009](./foundation/ADR-009-decline-spec-conformance-the-spec-stays-documentary.md) | Decline spec conformance; the spec stays documentary | Accepted |
-| [ADR-010](./foundation/ADR-010-standalone-claude-settings-projector-for-claude-settings-json.md) | Standalone Claude settings projector for ~/.claude/settings.json | Draft |
+| [ADR-010](./foundation/ADR-010-standalone-claude-settings-projector-for-claude-settings-json.md) | Standalone Claude settings projector for ~/.claude/settings.json | Accepted |
+| [ADR-011](./foundation/ADR-011-markdown-frontmatter-settings-fragments-validated-against-the-claude-code-schema.md) | Markdown+frontmatter settings fragments validated against the Claude Code schema | Proposed |
 
 ## Interface
 _Surfaces over the shared core — the non-interactive JSON CLI (agent surface) and the Ratatui TUI (human surface), live-watch presentation_
