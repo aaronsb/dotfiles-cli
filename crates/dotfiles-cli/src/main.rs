@@ -5,6 +5,7 @@
 //! `status`, `deploy`, `enable`, `disable`, `add`, `remove`, `list`, `push`.
 
 mod banner;
+mod claude;
 mod commands;
 mod diff_view;
 mod pkg;
@@ -110,6 +111,8 @@ enum Command {
     Pkg(pkg::PkgArgs),
     /// Manage profiles — named scopes over dotfiles + packages (per machine/role).
     Profile(profile::ProfileArgs),
+    /// Read and write Claude Code user-scope settings (~/.claude/settings.json).
+    Claude(claude::ClaudeArgs),
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -273,6 +276,10 @@ fn main() -> anyhow::Result<()> {
         Command::Profile(args) => {
             let ctx = Ctx::resolve(&cli)?;
             profile::run(&ctx, args)?;
+        }
+        Command::Claude(args) => {
+            let ctx = Ctx::resolve(&cli)?;
+            claude::run(&ctx, args)?;
         }
     }
     Ok(())
