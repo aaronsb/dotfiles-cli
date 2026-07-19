@@ -64,8 +64,8 @@ pub struct Merged {
 // --- nested-path helpers (dotted keys over a JSON object) ---
 
 /// Read the value at a dotted `path`. `None` if any segment is missing or a
-/// non-final segment is not an object.
-fn get_path<'a>(obj: &'a Map<String, Value>, path: &str) -> Option<&'a Value> {
+/// non-final segment is not an object. Exposed so callers share one traversal.
+pub fn get_path<'a>(obj: &'a Map<String, Value>, path: &str) -> Option<&'a Value> {
     let mut segs = path.split('.');
     let first = segs.next()?;
     let mut cur = obj.get(first)?;

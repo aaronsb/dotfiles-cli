@@ -86,6 +86,15 @@ pub fn project_value(
     ours: &Value,
     base: &Value,
 ) -> Result<Projection, String> {
+    // Refuse a non-object live document. Collapsing an array/scalar to `{}` and
+    // writing our object over it would destroy the operator's file, and the
+    // self-audit (which strips both sides to `{}`) could not see the loss.
+    if !live.is_object() {
+        return Err(
+            "live settings.json is not a JSON object — refusing to overwrite it; fix or remove the file first"
+                .to_string(),
+        );
+    }
     let audit = owned_union(slice, base, ours);
     let before = stripped_user_view(slice, live, &audit);
     let m = merge(slice, live, ours, base);
@@ -138,13 +147,10 @@ pub fn project(
 }
 
 /// Read the config item at a dotted `path` (e.g. `permissions.allow`) from a
-/// settings document. `None` if any segment is missing.
+/// settings document. `None` if any segment is missing. Shares the traversal in
+/// [`crate::settings_merge::get_path`].
 pub fn get(settings: &Value, dotted: &str) -> Option<Value> {
-    let mut cur = settings;
-    for seg in dotted.split('.') {
-        cur = cur.as_object()?.get(seg)?;
-    }
-    Some(cur.clone())
+    crate::settings_merge::get_path(settings.as_object()?, dotted).cloned()
 }
 
 #[cfg(test)]
@@ -225,6 +231,15 @@ mod tests {
         let ours = json!({ "permissions": { "allow": ["Bash(dotfiles:*)"] } });
         let out = project_value(&slice(), &live, &ours, &json!({})).unwrap();
         assert!(out.changed);
+    }
+
+    #[test]
+    fn refuses_a_non_object_live_document() {
+        // Regression (round-2 #2): a non-object live file must not be collapsed to
+        // {} and overwritten — refuse instead.
+        let ours = json!({ "statusLine": { "command": "s.sh" } });
+        assert!(project_value(&slice(), &json!([1, 2, 3]), &ours, &json!({})).is_err());
+        assert!(project_value(&slice(), &json!("scalar"), &ours, &json!({})).is_err());
     }
 
     #[cfg(unix)]

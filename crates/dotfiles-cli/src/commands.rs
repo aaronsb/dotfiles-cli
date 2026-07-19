@@ -48,10 +48,10 @@ pub fn deploy(ctx: &Ctx, dry_run: bool, force: bool) -> anyhow::Result<()> {
     }
 
     // Orchestrated projection of Claude user-scope settings (ADR-010) — a no-op
-    // unless the repo carries a claude/settings.d store. Non-fatal to the deploy.
-    if let Err(e) = crate::claude::deploy_step(ctx, dry_run) {
-        eprintln!("claude settings: {e}");
-    }
+    // unless the repo carries a claude/settings.d store. A projection failure
+    // (self-audit refusal, backup failure) fails the deploy with a non-zero exit
+    // rather than a swallowed stderr line, so scripts and CI can catch it.
+    crate::claude::deploy_step(ctx, dry_run).map_err(|e| anyhow::anyhow!("claude settings: {e}"))?;
     Ok(())
 }
 
