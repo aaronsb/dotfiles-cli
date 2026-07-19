@@ -59,10 +59,14 @@ choices on every deploy.
 rules out delegating the merge to agent-ways' `ways settings project`: a dependency on
 the `ways` binary breaks the standalone case.
 
-This decision is being made in coordination with a concurrent agent-ways ADR (owned by
-that repo) which retires `settings_merge.rs` as a `settings.json` writer, ships its
-security + operational baseline as an app-owned fragment layer, and makes
-`ways settings project` its sole 3-way writer. The two tools must coexist on one file.
+This decision is made in coordination with a concurrent agent-ways ADR (ADR-169, owned
+by that repo). Under it, agent-ways **keeps** `settings_merge.rs` only for the
+configuration it needs to **manage itself** — its `hooks` + operational-allow +
+`WAYS_DENY` baseline — and **hands the user-config service** (what `ways settings` did:
+the fragment-store / interview apparatus, plus ownership of `statusLine` / `attribution`
+/ `env` and the user's own permission entries) to this projector. What remains in
+agent-ways is self-management only — possibly nothing user-facing. The two tools coexist
+on one file via strictly disjoint ownership (enumerated below).
 
 ## Decision
 
