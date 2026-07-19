@@ -96,30 +96,39 @@ pub fn project_value(
         );
     }
 
-    // Structural guard (the drift-proof root fix): an exclusive owned leaf may only
-    // overwrite a scalar or absent live value. If the live value at a path we assert
-    // is an object or an array, asserting our leaf would replace foreign structure
-    // wholesale — and the self-audit cannot see it, because it strips the owned path
-    // from both the before and after views. Refuse rather than silently destroy it.
-    // (Shared lists — permissions.allow/deny/ask/… — are union_lists, never here.)
+    // Structural guard (the drift-proof root fix): the self-audit is blind to
+    // foreign data destroyed *at a path we own*, because it strips that path from
+    // both the before and after views. So refuse, up front, to overwrite structure
+    // we did not write. It is **base-aware**: our own prior value (live == base) or
+    // an already-equal value (live == ours) is safe, so idempotent re-projection is
+    // never blocked — only genuinely foreign structure is.
     let live_obj = live.as_object().expect("checked object above");
     let ours_obj = ours.as_object().cloned().unwrap_or_default();
+    let base_obj = base.as_object().cloned().unwrap_or_default();
+    use crate::settings_merge::get_path;
     for path in &slice.exclusive {
-        if crate::settings_merge::get_path(&ours_obj, path).is_none() {
-            continue; // not asserting this leaf (a relinquish is handled in merge)
+        let Some(ours_v) = get_path(&ours_obj, path) else { continue }; // not asserting
+        let Some(live_v) = get_path(live_obj, path) else { continue }; // nothing to clobber
+        if !live_v.is_object() && !live_v.is_array() {
+            continue; // overwriting a scalar is fine
         }
-        match crate::settings_merge::get_path(live_obj, path) {
-            Some(v) if v.is_object() => {
-                return Err(format!(
-                    "refusing to project: settings.json has an object at '{path}' — managing it would overwrite foreign sub-keys; declare its leaves (e.g. {path}.<field>) instead"
-                ));
-            }
-            Some(v) if v.is_array() => {
-                return Err(format!(
-                    "refusing to project: settings.json has an array at '{path}' that this tool does not manage as a list — leave it, or manage it via a permissions.* list"
-                ));
-            }
-            _ => {}
+        if live_v == ours_v || get_path(&base_obj, path) == Some(live_v) {
+            continue; // already what we'd write, or our own prior value — safe
+        }
+        return Err(format!(
+            "refusing to project: settings.json has {} at '{path}' that this tool did not write — overwriting it would lose foreign data; reconcile settings.json or the fragment",
+            if live_v.is_object() { "an object" } else { "an array" }
+        ));
+    }
+    // Union lists: a foreign NON-array at a list path cannot be safely unioned into
+    // (the merge would read it as empty and overwrite it). Refuse rather than lose it.
+    for path in &slice.union_lists {
+        if let Some(live_v) = get_path(live_obj, path)
+            && !live_v.is_array()
+        {
+            return Err(format!(
+                "refusing to project: settings.json has a non-array at '{path}' — cannot merge a managed list into it; reconcile settings.json"
+            ));
         }
     }
 
@@ -166,9 +175,13 @@ pub fn project(
             atomic_write_json(settings_path, &out.settings)?;
         }
         // Persist the base even when nothing changed: on first run over a
-        // pre-existing install this seeds the base from the adopted values.
+        // pre-existing install this seeds the base from the adopted values. A base
+        // write failure is non-fatal: settings.json (the source of truth) is already
+        // written correctly, and the base re-syncs on the next successful run —
+        // failing here would wrongly trip a caller's fragment rollback and orphan
+        // the just-projected value.
         if &out.base != base {
-            atomic_write_json(base_path, &out.base)?;
+            let _ = atomic_write_json(base_path, &out.base);
         }
     }
     Ok(out)
@@ -296,6 +309,30 @@ mod tests {
             &json!({}),
         );
         assert!(ok.is_ok());
+    }
+
+    #[test]
+    fn own_array_leaf_reprojects_idempotently() {
+        // Regression (round-4 #4): the guard must be base-aware — a non-union array
+        // leaf WE wrote must not read as "foreign" and wedge the second projection.
+        let s = OwnedSlice::new(&["someList"], &[]);
+        let ours = json!({ "someList": ["a", "b"] });
+        let first = project_value(&s, &json!({}), &ours, &json!({})).unwrap();
+        let second = project_value(&s, &first.settings, &ours, &first.base);
+        assert!(second.is_ok(), "our own array leaf must reproject, not refuse");
+        // A genuinely foreign array (base did not record it) is still refused.
+        let foreign = project_value(&s, &json!({ "someList": ["x"] }), &ours, &json!({}));
+        assert!(foreign.is_err());
+    }
+
+    #[test]
+    fn union_list_with_non_array_live_is_refused() {
+        // Regression (round-4 #1): a foreign non-array at a union-list path must be
+        // refused, not silently overwritten.
+        let s = OwnedSlice::new(&[], &["permissions.allow"]);
+        let live = json!({ "permissions": { "allow": { "weird": true } } });
+        let ours = json!({ "permissions": { "allow": ["Bash(x:*)"] } });
+        assert!(project_value(&s, &live, &ours, &json!({})).is_err());
     }
 
     #[cfg(unix)]

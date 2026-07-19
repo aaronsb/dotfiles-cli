@@ -48,10 +48,17 @@ pub fn deploy(ctx: &Ctx, dry_run: bool, force: bool) -> anyhow::Result<()> {
     }
 
     // Orchestrated projection of Claude user-scope settings (ADR-010) — a no-op
-    // unless the repo carries a claude/settings.d store. A projection failure
-    // (self-audit refusal, backup failure) fails the deploy with a non-zero exit
-    // rather than a swallowed stderr line, so scripts and CI can catch it.
-    crate::claude::deploy_step(ctx, dry_run).map_err(|e| anyhow::anyhow!("claude settings: {e}"))?;
+    // unless the repo carries a claude/settings.d store.
+    //
+    // Deliberately NON-FATAL here: deploying dotfile symlinks and reconciling
+    // ~/.claude/settings.json are separable concerns, and a settings conflict (e.g.
+    // a committed fragment that clashes with a foreign edit on this machine) must
+    // not block the symlink deploy or wedge `--dry-run`. It is surfaced loudly. The
+    // strict, exit-code-bearing path for scripts/CI is the explicit
+    // `dotfiles claude project`, which propagates the same error.
+    if let Err(e) = crate::claude::deploy_step(ctx, dry_run) {
+        eprintln!("warning: claude settings not reconciled: {e}");
+    }
     Ok(())
 }
 

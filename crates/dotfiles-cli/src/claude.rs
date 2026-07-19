@@ -365,23 +365,19 @@ fn unset(ctx: &Ctx, key: &str) -> anyhow::Result<()> {
     validate_fragment(&frag, &frag_path)?;
     let previous = std::fs::read(&frag_path).ok();
     sp::atomic_write_json(&frag_path, &frag).map_err(|e| anyhow::anyhow!(e))?;
-    // Compile the store once, reused for the declared-elsewhere check and the
-    // projection. `unset` only edits the manual fragment; if another fragment still
-    // declares the key, it stays managed. Say so rather than implying removal.
-    let ours = load_store(ctx)?;
-    if sp::get(&ours, key).is_some() {
-        println!("note: {key} is still declared in another fragment — it remains managed");
-    }
-    match project_loaded(ctx, &ours, false) {
-        Ok(()) => {
-            println!("unset {key} in {}", frag_path.display());
-            Ok(())
+    // Everything after the write must roll back on ANY error (including a load_store
+    // failure from a sibling fragment), not just a projection refusal.
+    let outcome = (|| {
+        // Compile the store once, reused for the declared-elsewhere check and the
+        // projection. `unset` only edits the manual fragment; if another fragment
+        // still declares the key, it stays managed — say so rather than imply removal.
+        let ours = load_store(ctx)?;
+        if sp::get(&ours, key).is_some() {
+            println!("note: {key} is still declared in another fragment — it remains managed");
         }
-        Err(e) => {
-            rollback_fragment(previous, &frag_path);
-            Err(e)
-        }
-    }
+        project_loaded(ctx, &ours, false)
+    })();
+    finish_transaction(outcome, previous, &frag_path, &format!("unset {key} in {}", frag_path.display()))
 }
 
 /// Persist `frag` to `frag_path`, then project. If the projection is refused (e.g.
@@ -395,27 +391,47 @@ fn write_and_project(
 ) -> anyhow::Result<()> {
     let previous = std::fs::read(frag_path).ok();
     sp::atomic_write_json(frag_path, frag).map_err(|e| anyhow::anyhow!(e))?;
-    match project(ctx, false) {
+    finish_transaction(project(ctx, false), previous, frag_path, done_msg)
+}
+
+/// Commit a fragment transaction: on success print `done_msg`; on failure roll the
+/// fragment back to `previous`, surfacing a combined error if the rollback itself
+/// fails (so a bad fragment is never silently left on disk).
+fn finish_transaction(
+    outcome: anyhow::Result<()>,
+    previous: Option<Vec<u8>>,
+    frag_path: &Path,
+    done_msg: &str,
+) -> anyhow::Result<()> {
+    match outcome {
         Ok(()) => {
             println!("{done_msg}");
             Ok(())
         }
-        Err(e) => {
-            rollback_fragment(previous, frag_path);
-            Err(e)
-        }
+        Err(e) => match rollback_fragment(previous, frag_path) {
+            Ok(()) => Err(e),
+            Err(re) => Err(anyhow::anyhow!(
+                "{e}\n  rollback of {} also failed: {re} — fix it by hand",
+                frag_path.display()
+            )),
+        },
     }
 }
 
-/// Restore a fragment to its prior bytes, or remove it if it did not exist before.
-fn rollback_fragment(previous: Option<Vec<u8>>, path: &Path) {
+/// Restore a fragment to its prior bytes (atomically), or remove it if it did not
+/// exist before. Returns an error if the restore itself fails.
+fn rollback_fragment(previous: Option<Vec<u8>>, path: &Path) -> anyhow::Result<()> {
     match previous {
         Some(bytes) => {
-            std::fs::write(path, bytes).ok();
+            let v: Value = serde_json::from_slice(&bytes)
+                .map_err(|e| anyhow::anyhow!("re-parsing prior fragment: {e}"))?;
+            sp::atomic_write_json(path, &v).map_err(|e| anyhow::anyhow!(e))
         }
-        None => {
-            std::fs::remove_file(path).ok();
-        }
+        None => match std::fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(anyhow::anyhow!("removing {}: {e}", path.display())),
+        },
     }
 }
 
