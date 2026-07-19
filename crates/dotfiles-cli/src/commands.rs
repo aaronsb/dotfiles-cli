@@ -46,6 +46,12 @@ pub fn deploy(ctx: &Ctx, dry_run: bool, force: bool) -> anyhow::Result<()> {
             }
         }
     }
+
+    // Orchestrated projection of Claude user-scope settings (ADR-010) — a no-op
+    // unless the repo carries a claude/settings.d store. Non-fatal to the deploy.
+    if let Err(e) = crate::claude::deploy_step(ctx, dry_run) {
+        eprintln!("claude settings: {e}");
+    }
     Ok(())
 }
 

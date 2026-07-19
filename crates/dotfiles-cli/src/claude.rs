@@ -59,6 +59,16 @@ fn store_dir(ctx: &Ctx) -> PathBuf {
     ctx.repo_root.join("claude").join("settings.d")
 }
 
+/// Projection as a `dotfiles deploy` step (the orchestrated mode): a no-op unless
+/// the repo carries a `claude/settings.d` store. Prints a small section header.
+pub fn deploy_step(ctx: &Ctx, dry_run: bool) -> anyhow::Result<()> {
+    if !store_dir(ctx).exists() {
+        return Ok(());
+    }
+    println!("\n=== Claude settings ===");
+    project(ctx, dry_run)
+}
+
 /// The manual-edits fragment that `set` / `unset` author.
 fn manual_fragment(ctx: &Ctx) -> PathBuf {
     store_dir(ctx).join("50-manual.json")
