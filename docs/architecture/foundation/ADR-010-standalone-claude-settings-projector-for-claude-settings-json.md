@@ -134,6 +134,27 @@ a general always-fresh mirror of the whole dotfiles tree. This is a narrow, expl
 merge into one external file, owning a declared key subset — closer in spirit to a
 managed `deploy` step than to live projection.
 
+## Migration and handoff from agent-ways
+
+`statusLine` and `attribution` are today asserted into `settings.json` by agent-ways'
+`ways settings project` (reading the dotfiles fragment store). Ownership of these keys
+transfers to this projector. Because a scalar/object owner drops a key it recorded but
+no longer asserts (deprecated-base removal), a careless handoff could have one tool
+delete what the other just wrote, order-dependently. The transfer is therefore governed
+by a **relinquish protocol** (agent-ways ADR-169):
+
+- agent-ways **relinquishes** these keys by removing its projector outright and doing
+  **no final cleanup pass** — it simply stops asserting them, leaving the live values in
+  place as foreign content. It must *not* run deprecated-base removal on them.
+- this projector **adopts** each key via the `migrating` path: read the live foreign
+  value, assert `ours` equal to it, seed the base, and converge idempotently — no gap,
+  no clobber, independent of run order.
+
+After one migration cycle agent-ways no longer touches these keys and this projector is
+their sole writer, so steady-state disjoint ownership (the coexistence contract above) is
+restored. Two dedicated test vectors pin the handoff: **adopt-foreign** (adopt a live
+`statusLine` with no gap) and **relinquish** (clear base, value survives, no clobber).
+
 ## Consequences
 
 ### Positive
