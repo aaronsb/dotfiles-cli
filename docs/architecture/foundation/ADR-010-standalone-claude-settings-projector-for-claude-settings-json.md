@@ -103,9 +103,27 @@ its own base recorded, leaving foreign entries in place.
 
 **4. Coexistence contract with agent-ways.** Two independent 3-way writers on one file
 are safe **iff** each preserves the keys and list-entries the other authored, and
-neither declares a fragment for a key the other owns. dotfiles' declared keys (L2/L3
-user config) stay disjoint from agent-ways' L1 baseline keys (`hooks`, `WAYS_DENY`,
-operational allows). This invariant is documented in both repos' ADRs.
+neither declares a fragment for a key the other owns. The owned sets are pinned by
+agent-ways' baseline constants (cross-referenced with agent-ways ADR-169), so
+disjointness holds **by-constant**, not by guesswork:
+
+- **agent-ways owns** — `hooks`; `permissions.allow` ⊇ `{Bash(ways:*), Bash(attend:*),
+  Bash(attend-chat:*), Bash(way-embed:*), Edit(~/.claude/**)}`; `permissions.deny` ⊇
+  `WAYS_DENY` (`Read`/`Edit` of `~/.ssh`, plus `Read` of `~/.aws`, `~/.gnupg`,
+  `~/.config/gcloud`, `~/.kube/config`, `~/.netrc`, `./.env`, `./.env.local`). This
+  baseline stays **minimal** — it does not expand to agent-ways-adjacent tooling.
+- **dotfiles owns** — everything else user-scope: `statusLine`, `attribution`, `env`,
+  and every `permissions.allow` entry outside the baseline (the dotfiles CLI,
+  oh-my-posh/posh-theme, `Read(~/**)`, generic shell allows, and the "gray-zone" tools
+  that are *not* agent-ways-shipped binaries — `way-match`, `kg`, `mmaid`, `adr`, the
+  optional MCP servers).
+- **Neither owns; both preserve** — Claude Code's own runtime keys, written by `/config`
+  and in-situ: `model`, `tui`, `autoCompactEnabled`, `teammateMode`,
+  `remoteControlAtStartup`, `skipWorkflowUsageWarning`, the notification toggles,
+  `advisorModel`, `effortLevel`.
+
+This invariant is documented in both repos' ADRs (dotfiles ADR-010 ↔ agent-ways
+ADR-169).
 
 **5. Trigger.** `dotfiles deploy` invokes the projector after linking, so a deploy
 brings `~/.claude/settings.json` into agreement with the fragment store. Exact CLI verb
