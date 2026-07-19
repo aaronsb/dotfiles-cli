@@ -20,21 +20,13 @@ use std::path::{Path, PathBuf};
 
 /// The shared concat-list paths — additive-union, not whole-object owned. Every
 /// other leaf a fragment declares is owned exclusively.
-const UNION_LISTS: [&str; 2] = ["permissions.allow", "permissions.deny"];
-
-/// Keys that are objects in Claude Code's settings schema and typically hold
-/// foreign sub-entries. Declaring a scalar/array at one of these would let the
-/// projector overwrite the whole foreign object, so a fragment must keep them
-/// object-typed.
-const CONTAINER_KEYS: [&str; 8] = [
-    "env",
-    "permissions",
-    "statusLine",
-    "hooks",
-    "tui",
-    "enabledPlugins",
-    "extraKnownMarketplaces",
-    "attribution",
+/// The shared concat-list paths — additive-union, not whole-object owned. These
+/// are the permission rule/dir lists that several writers contribute to.
+const UNION_LISTS: [&str; 4] = [
+    "permissions.allow",
+    "permissions.deny",
+    "permissions.ask",
+    "permissions.additionalDirectories",
 ];
 
 fn is_union_list(path: &str) -> bool {
@@ -118,31 +110,19 @@ fn read_fragments(dir: &Path) -> anyhow::Result<Vec<(PathBuf, Value)>> {
     Ok(out)
 }
 
-/// Reject a malformed fragment with a clean error rather than silent foreign-data
-/// loss or a later panic: the fragment must be an object, its container keys must
-/// stay objects, and the shared concat-lists must be arrays.
+/// Structural fragment validation: it must be a JSON object, and any shared
+/// concat-list it declares must be an array (so union handling is well-formed).
+/// Foreign-object/array clobbering is caught by the projector's structural guard
+/// against the *live* document, so no brittle key allowlist is needed here.
 fn validate_fragment(frag: &Value, path: &Path) -> anyhow::Result<()> {
-    let Some(obj) = frag.as_object() else {
+    if !frag.is_object() {
         anyhow::bail!("{}: fragment must be a JSON object (got {})", path.display(), kind(frag));
-    };
-    for key in CONTAINER_KEYS {
-        if let Some(v) = obj.get(key)
-            && !v.is_object()
-        {
-            anyhow::bail!("{}: {key} must be a JSON object (got {})", path.display(), kind(v));
-        }
     }
-    if let Some(perms) = obj.get("permissions").and_then(|p| p.as_object()) {
-        for key in ["allow", "deny"] {
-            if let Some(v) = perms.get(key)
-                && !v.is_array()
-            {
-                anyhow::bail!(
-                    "{}: permissions.{key} must be a JSON array (got {})",
-                    path.display(),
-                    kind(v)
-                );
-            }
+    for ul in UNION_LISTS {
+        if let Some(v) = sp::get(frag, ul)
+            && !v.is_array()
+        {
+            anyhow::bail!("{}: {ul} must be a JSON array (got {})", path.display(), kind(&v));
         }
     }
     Ok(())
@@ -372,14 +352,10 @@ fn set(ctx: &Ctx, key: &str, value: &str) -> anyhow::Result<()> {
         set_dotted(&mut frag, key, Some(parsed));
         format!("set {key}")
     };
-    // Validate the fragment *before* persisting it, so a malformed edit (e.g. a
-    // scalar at a container key, or a sub-key of a list) errors without leaving a
-    // poisoned fragment on disk that would wedge every later command — and without
-    // printing a success line.
+    // Validate structure before persisting (a malformed list errors without leaving
+    // a bad fragment on disk), then write-and-project transactionally.
     validate_fragment(&frag, &frag_path)?;
-    sp::atomic_write_json(&frag_path, &frag).map_err(|e| anyhow::anyhow!(e))?;
-    println!("{message}");
-    project(ctx, false)
+    write_and_project(ctx, &frag_path, &frag, &message)
 }
 
 fn unset(ctx: &Ctx, key: &str) -> anyhow::Result<()> {
@@ -387,8 +363,8 @@ fn unset(ctx: &Ctx, key: &str) -> anyhow::Result<()> {
     let mut frag = sp::read_json_or_empty(&frag_path).map_err(|e| anyhow::anyhow!(e))?;
     set_dotted(&mut frag, key, None);
     validate_fragment(&frag, &frag_path)?;
+    let previous = std::fs::read(&frag_path).ok();
     sp::atomic_write_json(&frag_path, &frag).map_err(|e| anyhow::anyhow!(e))?;
-    println!("unset {key} in {}", frag_path.display());
     // Compile the store once, reused for the declared-elsewhere check and the
     // projection. `unset` only edits the manual fragment; if another fragment still
     // declares the key, it stays managed. Say so rather than implying removal.
@@ -396,7 +372,51 @@ fn unset(ctx: &Ctx, key: &str) -> anyhow::Result<()> {
     if sp::get(&ours, key).is_some() {
         println!("note: {key} is still declared in another fragment — it remains managed");
     }
-    project_loaded(ctx, &ours, false)
+    match project_loaded(ctx, &ours, false) {
+        Ok(()) => {
+            println!("unset {key} in {}", frag_path.display());
+            Ok(())
+        }
+        Err(e) => {
+            rollback_fragment(previous, &frag_path);
+            Err(e)
+        }
+    }
+}
+
+/// Persist `frag` to `frag_path`, then project. If the projection is refused (e.g.
+/// it would clobber foreign structure) or fails, roll the fragment back to its
+/// prior content — so a bad edit never lingers on disk to wedge later `deploy`s.
+fn write_and_project(
+    ctx: &Ctx,
+    frag_path: &Path,
+    frag: &Value,
+    done_msg: &str,
+) -> anyhow::Result<()> {
+    let previous = std::fs::read(frag_path).ok();
+    sp::atomic_write_json(frag_path, frag).map_err(|e| anyhow::anyhow!(e))?;
+    match project(ctx, false) {
+        Ok(()) => {
+            println!("{done_msg}");
+            Ok(())
+        }
+        Err(e) => {
+            rollback_fragment(previous, frag_path);
+            Err(e)
+        }
+    }
+}
+
+/// Restore a fragment to its prior bytes, or remove it if it did not exist before.
+fn rollback_fragment(previous: Option<Vec<u8>>, path: &Path) {
+    match previous {
+        Some(bytes) => {
+            std::fs::write(path, bytes).ok();
+        }
+        None => {
+            std::fs::remove_file(path).ok();
+        }
+    }
 }
 
 /// Set (or, with `None`, remove) a dotted key in a JSON object, reusing the core
@@ -454,22 +474,16 @@ mod tests {
     }
 
     #[test]
-    fn validate_fragment_rejects_non_array_permission_list() {
-        // Regression: a string allow is rejected cleanly, not panicked on later.
-        let err = validate_fragment(&json!({ "permissions": { "allow": "Bash(x:*)" } }), Path::new("f.json"));
-        assert!(err.is_err());
-        assert!(validate_fragment(&json!({ "permissions": { "allow": ["ok"] } }), Path::new("f.json")).is_ok());
-    }
-
-    #[test]
-    fn validate_fragment_rejects_scalar_at_container_key() {
-        // Regression (round-2 #1): a scalar at an object-typed key would let the
-        // projector clobber the whole foreign object — reject it up front.
-        assert!(validate_fragment(&json!({ "env": "FOO=bar" }), Path::new("f.json")).is_err());
-        assert!(validate_fragment(&json!({ "permissions": "x" }), Path::new("f.json")).is_err());
-        assert!(validate_fragment(&json!({ "env": { "FOO": "bar" } }), Path::new("f.json")).is_ok());
-        // And a non-object fragment is rejected.
+    fn validate_fragment_checks_structure() {
+        // A non-object fragment is rejected.
         assert!(validate_fragment(&json!([1, 2]), Path::new("f.json")).is_err());
+        // Every shared concat-list must be an array (else union handling breaks).
+        assert!(validate_fragment(&json!({ "permissions": { "allow": "x" } }), Path::new("f.json")).is_err());
+        assert!(validate_fragment(&json!({ "permissions": { "ask": "x" } }), Path::new("f.json")).is_err());
+        assert!(validate_fragment(&json!({ "permissions": { "allow": ["ok"], "ask": ["y"] } }), Path::new("f.json")).is_ok());
+        // A scalar at an object-typed key is NOT a validate error — it is caught at
+        // project time by the structural guard against the live document.
+        assert!(validate_fragment(&json!({ "env": "x" }), Path::new("f.json")).is_ok());
     }
 
     #[test]

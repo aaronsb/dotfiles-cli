@@ -95,6 +95,34 @@ pub fn project_value(
                 .to_string(),
         );
     }
+
+    // Structural guard (the drift-proof root fix): an exclusive owned leaf may only
+    // overwrite a scalar or absent live value. If the live value at a path we assert
+    // is an object or an array, asserting our leaf would replace foreign structure
+    // wholesale — and the self-audit cannot see it, because it strips the owned path
+    // from both the before and after views. Refuse rather than silently destroy it.
+    // (Shared lists — permissions.allow/deny/ask/… — are union_lists, never here.)
+    let live_obj = live.as_object().expect("checked object above");
+    let ours_obj = ours.as_object().cloned().unwrap_or_default();
+    for path in &slice.exclusive {
+        if crate::settings_merge::get_path(&ours_obj, path).is_none() {
+            continue; // not asserting this leaf (a relinquish is handled in merge)
+        }
+        match crate::settings_merge::get_path(live_obj, path) {
+            Some(v) if v.is_object() => {
+                return Err(format!(
+                    "refusing to project: settings.json has an object at '{path}' — managing it would overwrite foreign sub-keys; declare its leaves (e.g. {path}.<field>) instead"
+                ));
+            }
+            Some(v) if v.is_array() => {
+                return Err(format!(
+                    "refusing to project: settings.json has an array at '{path}' that this tool does not manage as a list — leave it, or manage it via a permissions.* list"
+                ));
+            }
+            _ => {}
+        }
+    }
+
     let audit = owned_union(slice, base, ours);
     let before = stripped_user_view(slice, live, &audit);
     let m = merge(slice, live, ours, base);
@@ -159,7 +187,9 @@ mod tests {
     use serde_json::json;
 
     fn slice() -> OwnedSlice {
-        OwnedSlice::new(&["statusLine"], &["permissions.allow", "permissions.deny"])
+        // Leaf-path ownership (as the CLI derives): own statusLine.command, not the
+        // whole statusLine object.
+        OwnedSlice::new(&["statusLine.command"], &["permissions.allow", "permissions.deny"])
     }
 
     fn tmp(tag: &str) -> PathBuf {
@@ -240,6 +270,32 @@ mod tests {
         let ours = json!({ "statusLine": { "command": "s.sh" } });
         assert!(project_value(&slice(), &json!([1, 2, 3]), &ours, &json!({})).is_err());
         assert!(project_value(&slice(), &json!("scalar"), &ours, &json!({})).is_err());
+    }
+
+    #[test]
+    fn refuses_to_overwrite_a_foreign_object_or_array_at_an_owned_leaf() {
+        // Regression (round-3): the structural guard. Asserting an owned leaf whose
+        // live value is an object (foreign sub-keys) or a non-managed array must be
+        // refused — the self-audit alone is blind to this loss.
+        let s = OwnedSlice::new(&["env", "hooks.PreToolUse"], &[]);
+        // live.env is a foreign object; ours declares env as a scalar → refuse.
+        let live_obj = json!({ "env": { "HTTP_PROXY": "http://p" } });
+        assert!(project_value(&s, &live_obj, &json!({ "env": "x" }), &json!({})).is_err());
+        // live.hooks.PreToolUse is a foreign array (agent-ways) → refuse.
+        let live_arr = json!({ "hooks": { "PreToolUse": [{ "x": 1 }] } });
+        assert!(
+            project_value(&s, &live_arr, &json!({ "hooks": { "PreToolUse": [{ "y": 2 }] } }), &json!({})).is_err()
+        );
+        // But asserting a scalar *leaf* (env.A) over a scalar live value is fine —
+        // the foreign sibling is preserved and no structure is clobbered.
+        let s2 = OwnedSlice::new(&["env.A"], &[]);
+        let ok = project_value(
+            &s2,
+            &json!({ "env": { "A": "old", "HTTP_PROXY": "http://p" } }),
+            &json!({ "env": { "A": "new" } }),
+            &json!({}),
+        );
+        assert!(ok.is_ok());
     }
 
     #[cfg(unix)]
