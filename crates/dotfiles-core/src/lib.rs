@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 pub mod deploy;
 pub mod edit;
 pub mod pkg;
+pub mod settings_merge;
 
 /// How an entry is deployed (ADR-001 #1).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
