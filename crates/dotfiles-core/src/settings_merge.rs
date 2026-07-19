@@ -221,6 +221,34 @@ pub fn stripped_user_view(slice: &OwnedSlice, settings: &Value, base: &Value) ->
     Value::Object(obj)
 }
 
+/// The union of two owned-slice bases: a base holding every exclusive key present
+/// in either, and, per shared list, the union of both sides' entries.
+///
+/// Used by the self-audit: to prove a projection touched nothing outside our slice,
+/// both the before and after documents are stripped by *this* union — so a key that
+/// moved in or out of the slice this run (an adopt or a relinquish) is removed from
+/// both, and the remaining user portion is compared honestly.
+pub fn owned_union(slice: &OwnedSlice, a: &Value, b: &Value) -> Value {
+    let ao = a.as_object().cloned().unwrap_or_default();
+    let bo = b.as_object().cloned().unwrap_or_default();
+    let mut out = Map::new();
+    for key in &slice.exclusive {
+        if let Some(v) = ao.get(key).or_else(|| bo.get(key)) {
+            out.insert(key.clone(), v.clone());
+        }
+    }
+    for path in &slice.union_lists {
+        let mut entries = get_array(&ao, path);
+        for e in get_array(&bo, path) {
+            if !entries.contains(&e) {
+                entries.push(e);
+            }
+        }
+        set_or_remove_array(&mut out, path, entries);
+    }
+    Value::Object(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
