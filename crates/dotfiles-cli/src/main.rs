@@ -10,6 +10,7 @@ mod commands;
 mod diff_view;
 mod pkg;
 mod profile;
+mod selfupdate;
 mod show;
 mod table;
 

@@ -210,6 +210,9 @@ pub fn pull(ctx: &Ctx, branch: &str) -> anyhow::Result<()> {
     let behind = count(repo, &format!("HEAD..{remote_ref}"))?;
     if behind == 0 {
         println!("already up to date with {remote_ref}");
+        // Still reconcile: a machine can be current on git and stale on the
+        // binary, which is the drift ADR-200 exists to catch.
+        crate::selfupdate::reconcile(repo);
         return Ok(());
     }
 
@@ -220,6 +223,9 @@ pub fn pull(ctx: &Ctx, branch: &str) -> anyhow::Result<()> {
     println!("pulled {behind} commit(s) from {remote_ref}:");
     print!("{}", git_stdout(repo, &["log", "--oneline", &format!("{old_head}..HEAD")])?);
     print!("{}", git_stdout(repo, &["diff", "--stat", &format!("{old_head}..HEAD")])?);
+    // The pull may have moved the pin; reconcile against what the store now
+    // asks for, not what it asked for a moment ago.
+    crate::selfupdate::reconcile(repo);
     Ok(())
 }
 

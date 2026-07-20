@@ -29,7 +29,7 @@ _Founding and cross-cutting decisions — tool existence, the shared manifest co
 | [ADR-007](./foundation/ADR-007-reduce-scope-to-a-self-documenting-schema-and-a-cli-retire-the-tui-and-projection.md) | Reduce scope to a self-documenting schema and a CLI; retire the TUI and projection | Accepted |
 | [ADR-008](./foundation/ADR-008-profiles-named-scopes-over-dotfiles-and-packages-per-machine-or-role.md) | Profiles — named scopes over dotfiles and packages, per machine or role | Accepted |
 | [ADR-009](./foundation/ADR-009-decline-spec-conformance-the-spec-stays-documentary.md) | Decline spec conformance; the spec stays documentary | Accepted |
-| [ADR-010](./foundation/ADR-010-standalone-claude-settings-projector-for-claude-settings-json.md) | Standalone Claude settings projector for ~/.claude/settings.json | Draft |
+| [ADR-010](./foundation/ADR-010-standalone-claude-settings-projector-for-claude-settings-json.md) | Standalone Claude settings projector for ~/.claude/settings.json | Accepted |
 
 ## Interface
 _Surfaces over the shared core — the non-interactive JSON CLI (agent surface) and the Ratatui TUI (human surface), live-watch presentation_
@@ -40,3 +40,10 @@ _Surfaces over the shared core — the non-interactive JSON CLI (agent surface) 
 | [ADR-101](./interface/ADR-101-clap-subcommands-for-nested-verbs.md) | clap subcommands for nested verbs | Draft |
 | [ADR-102](./interface/ADR-102-status-reflects-active-profile-state.md) | status reflects active profile state | Draft |
 | [ADR-103](./interface/ADR-103-friendly-change-detail-diff-in-the-cli.md) | friendly change-detail diff in the CLI | Draft |
+
+## Packaging
+_Distribution and lifecycle — submodule/release install split, version pinning, in-place upgrade, platform artifacts_
+
+| ADR | Title | Status |
+|-----|-------|--------|
+| [ADR-200](./packaging/ADR-200-the-store-pins-the-cli-and-pull-enforces-the-pin.md) | The store pins the CLI and pull enforces the pin | Draft |
