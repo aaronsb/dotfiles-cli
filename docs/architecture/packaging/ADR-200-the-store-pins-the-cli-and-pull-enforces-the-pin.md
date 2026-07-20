@@ -74,7 +74,38 @@ so; it does not re-exec itself.
 **Self-update failure never fails the pull.** No network, no `curl`, a
 read-only bin directory, or an unreachable release all degrade to a warning
 that names the drift and the manual remedy. The git half of the pull has
-already succeeded by that point and its result must stand on its own.
+already succeeded by that point and its result must stand on its own. This
+means the rejected warn-only alternative below is not merely rejected — it is
+the fallback on every failure path. What is rejected is warn-only as the
+*primary* behavior, not warn-only as a degradation.
+
+**The pin is validated, not interpolated.** It is parsed into a
+`MAJOR.MINOR.PATCH[-prerelease]` value before it reaches a URL, and the `v`
+prefix is normalized on the way out so a store pinned `0.5.0` still resolves
+the `v0.5.0` tag. Both halves matter. `curl` collapses `..` segments before
+issuing the request, so an unvalidated pin of
+`../../../../attacker/repo/releases/download/v1` redirects the download to an
+arbitrary repository while the host stays `github.com` — TLS passes, `curl -f`
+passes, and the artifact is chmod'd and renamed onto `$PATH`. Since reconcile
+runs on every pull, that would make the least-scrutinized line in the store an
+arbitrary-code-execution vector. An allowlist grammar cannot express a path
+segment, so traversal is impossible by construction rather than by filtering.
+
+**The download is checked for ELF magic before installation.** `curl -f`
+rejects HTTP errors, but a captive portal or intercepting proxy can answer 200
+with an HTML interstitial. Installing that bricks the CLI — including the
+`pull` that would otherwise heal it — so a length check alone is not enough.
+
+**Build artifacts are never replaced.** `current_exe()` resolves
+`/proc/self/exe` fully, so for a developer whose `~/.local/bin/dotfiles`
+symlinks into `target/release/`, a naive swap overwrites their build output
+and does it again on every pull. A binary under `target/{debug,release}/` is
+left alone, and `DOTFILES_NO_SELF_UPDATE=1` opts out of reconcile entirely —
+necessary because the window between `install.sh --latest` and committing the
+new pin is a window in which any pull would revert the machine.
+
+**Upgrade and downgrade are labeled differently**, compared numerically so
+`0.10.0` is not read as older than `0.9.0`.
 
 ## Consequences
 
@@ -84,8 +115,12 @@ already succeeded by that point and its result must stand on its own.
   without the operator tracking releases.
 - Store data and the capability required to interpret it move together, so an
   ADR-010-style split (fragments present, projector absent) self-heals.
-- The pin becomes real, making installs reproducible across machines as the
-  store's documentation already claimed.
+- The pin becomes real, so two machines converge on the same release rather
+  than on whatever was newest the day each was set up. This is reproducible
+  only as far as the tag is: git tags and release assets are both mutable, and
+  nothing here verifies a checksum. A pinned install is therefore repeatable,
+  not tamper-evident — closing that gap needs a committed digest beside the
+  pin, which this ADR does not do.
 - Drift becomes visible at the moment it matters rather than at the moment
   some downstream command mysteriously fails.
 
@@ -107,17 +142,29 @@ already succeeded by that point and its result must stand on its own.
 - Version comparison normalizes the `v` prefix (`v0.5.0` vs `0.5.0`) and
   treats any mismatch as drift rather than comparing semver ordering, so the
   pin can move in either direction.
-- Locally-built binaries will read as drifted whenever their reported version
-  differs from the pin. Developers working from source are expected to hit
-  this and to use `--latest` or an unpinned store rather than fighting it.
+- Locally-built binaries report the workspace version, which is only bumped at
+  release time. A source build therefore usually *matches* the pin and is left
+  alone rather than reading as drifted — the opposite of the naive
+  expectation, and the reason the ADR-010 projector could sit on a machine
+  reporting a version that did not contain it. Where a source build does
+  drift, the artifact check and `DOTFILES_NO_SELF_UPDATE=1` are the seams;
+  `install.sh --latest` is not one, since it does not affect `pull`.
+
+- On platforms with no prebuilt asset the drift notice says so and stops,
+  rather than pointing at an installer that would fail the same way. A
+  recurring warning with no working remedy trains the operator to ignore
+  exactly the signal this ADR exists to create.
 
 ## Alternatives Considered
 
 - **Warn on drift, let the operator run `install.sh`.** Safer — the binary
-  swap stays a deliberate human act. Rejected because it puts the remedy one
-  manual step away from the notice, and the motivating case was an operator
-  who had no idea the binary was even a moving part. A warning that must be
-  acted on is a warning that gets scrolled past.
+  swap stays a deliberate human act, and it avoids giving `pull` a network
+  dependency beyond git. Rejected as the primary behavior because it puts the
+  remedy one manual step away from the notice, and the motivating case was an
+  operator who had no idea the binary was even a moving part. A warning that
+  must be acted on is a warning that gets scrolled past. It remains the
+  fallback whenever the swap cannot proceed, so the safer behavior is what
+  degradation looks like rather than something given up entirely.
 
 - **A separate `dotfiles update` subcommand.** Keeps `pull` honest about
   touching only git. Rejected because it only helps operators who already

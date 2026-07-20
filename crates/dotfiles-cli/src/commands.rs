@@ -218,6 +218,10 @@ pub fn pull(ctx: &Ctx, branch: &str) -> anyhow::Result<()> {
 
     let old_head = git_stdout(repo, &["rev-parse", "HEAD"])?.trim().to_string();
     if !git(repo, &["merge", "--ff-only", &remote_ref, "--quiet"])?.status.success() {
+        // Reconcile before bailing: this operator is about to do manual git
+        // work over an unknown period, and a stale binary would silently
+        // shape all of it.
+        crate::selfupdate::reconcile(repo);
         anyhow::bail!("pull failed (likely diverged) — resolve manually");
     }
     println!("pulled {behind} commit(s) from {remote_ref}:");
