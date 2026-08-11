@@ -142,6 +142,12 @@ fn symlink(source: &Path, target: &Path) -> std::io::Result<()> {
     std::os::windows::fs::symlink_file(source, target)
 }
 
+/// Recursively copy a file or directory tree between two store paths — what
+/// `profile push`/`pull` uses to materialize a variant (ADR-011).
+pub fn copy_tree(source: &Path, target: &Path) -> std::io::Result<()> {
+    copy_recursive(source, target)
+}
+
 /// Recursively copy a file or directory tree (for `mode = "copy"`).
 ///
 /// On Unix, executable bits on `*.sh` files are preserved by the standard copy;
@@ -183,6 +189,7 @@ mod tests {
             why: None,
             spec: None,
             profiles: vec![],
+            paths: Default::default(),
         }
     }
 

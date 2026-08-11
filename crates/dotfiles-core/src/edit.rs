@@ -118,8 +118,10 @@ pub fn add_profile(
     Ok(())
 }
 
-/// Remove a profile: drop `[profiles.<name>]` and strip `name` from every
-/// entry's `profiles` array (an entry left with none becomes universal again).
+/// Remove a profile: drop `[profiles.<name>]`, strip `name` from every entry's
+/// `profiles` array (an entry left with none becomes universal again), and drop
+/// every `paths.<name>` variant it owned (ADR-011) — a variant keyed to a
+/// profile that no longer exists could never resolve.
 /// Returns whether the `[profiles.<name>]` table existed.
 pub fn remove_profile(doc: &mut DocumentMut, name: &str) -> bool {
     let existed = doc
@@ -135,6 +137,12 @@ pub fn remove_profile(doc: &mut DocumentMut, name: &str) -> bool {
             arr.retain(|v| v.as_str() != Some(name));
             if arr.is_empty() {
                 t.remove("profiles");
+            }
+        }
+        if let Some(paths) = t.get_mut("paths").and_then(Item::as_table_mut) {
+            paths.remove(name);
+            if paths.is_empty() {
+                t.remove("paths");
             }
         }
     }
@@ -155,6 +163,57 @@ pub fn add_entry_profile(doc: &mut DocumentMut, entry: &str, profile: &str) -> b
         arr.push(profile);
     }
     true
+}
+
+// --- per-profile content variants (ADR-011) -------------------------------
+
+/// Set an entry's variant path for `profile` (`paths.<profile> = "<path>"`),
+/// written as a dotted key so it sits inline with the entry's other fields
+/// rather than opening a sub-table. Returns `false` if no entry has that name.
+pub fn set_entry_path(doc: &mut DocumentMut, entry: &str, profile: &str, path: &str) -> bool {
+    let aot = entries_mut(doc);
+    let Some(i) = index_of(aot, entry) else { return false };
+    let t = aot.get_mut(i).expect("index from position");
+    if t.get("paths").and_then(Item::as_table).is_none() {
+        let mut paths = Table::new();
+        paths.set_dotted(true);
+        t.insert("paths", Item::Table(paths));
+    }
+    let paths = t["paths"].as_table_mut().expect("just ensured it is a table");
+    paths.set_dotted(true);
+    paths[profile] = value(path);
+    true
+}
+
+/// Drop an entry's variant for `profile`, so it falls back to the base `path`.
+/// Removes the whole `paths` table once it is empty. Returns whether a variant
+/// was actually there.
+pub fn remove_entry_path(doc: &mut DocumentMut, entry: &str, profile: &str) -> bool {
+    let aot = entries_mut(doc);
+    let Some(i) = index_of(aot, entry) else { return false };
+    let t = aot.get_mut(i).expect("index from position");
+    let Some(paths) = t.get_mut("paths").and_then(Item::as_table_mut) else { return false };
+    let existed = paths.remove(profile).is_some();
+    if paths.is_empty() {
+        t.remove("paths");
+    }
+    existed
+}
+
+/// Strip `profile` from an entry's `profiles` array (an entry left with none
+/// becomes universal again). Returns whether the tag was there.
+pub fn remove_entry_profile(doc: &mut DocumentMut, entry: &str, profile: &str) -> bool {
+    let aot = entries_mut(doc);
+    let Some(i) = index_of(aot, entry) else { return false };
+    let t = aot.get_mut(i).expect("index from position");
+    let Some(arr) = t.get_mut("profiles").and_then(Item::as_array_mut) else { return false };
+    let before = arr.len();
+    arr.retain(|v| v.as_str() != Some(profile));
+    let removed = arr.len() != before;
+    if arr.is_empty() {
+        t.remove("profiles");
+    }
+    removed
 }
 
 #[cfg(test)]
@@ -245,5 +304,56 @@ target = ".tmux.conf"
         // zsh's only profile was desktop -> stripped -> universal again.
         assert!(m.entries.iter().find(|e| e.name == "zsh").unwrap().profiles.is_empty());
         assert!(!remove_profile(&mut doc, "desktop"), "second remove is a no-op");
+    }
+
+    #[test]
+    fn variant_paths_round_trip_as_dotted_keys() {
+        let mut doc = parse(SRC).unwrap();
+        assert!(set_entry_path(&mut doc, "zsh", "slab", "zsh/.zshrc-slab"));
+        assert!(set_entry_path(&mut doc, "zsh", "cube", "zsh/.zshrc-cube"));
+        assert!(!set_entry_path(&mut doc, "ghost", "slab", "x"));
+
+        let out = doc.to_string();
+        assert!(out.contains(r#"paths.slab = "zsh/.zshrc-slab""#), "dotted, not a sub-table: {out}");
+        assert!(out.contains("# a manifest"), "comment preserved");
+        assert!(out.contains(r#"why = "shell baseline""#), "why preserved");
+
+        let m = Manifest::from_toml(&out).unwrap();
+        let zsh = m.entries.iter().find(|e| e.name == "zsh").unwrap();
+        assert_eq!(zsh.path_for("slab"), "zsh/.zshrc-slab");
+        assert_eq!(zsh.path_for("cube"), "zsh/.zshrc-cube");
+        assert_eq!(zsh.path_for("north"), "zsh/.zshrc", "untouched profiles keep the base");
+
+        // Overwriting an existing variant replaces it in place.
+        assert!(set_entry_path(&mut doc, "zsh", "slab", "zsh/.zshrc-slab2"));
+        let m = Manifest::from_toml(&doc.to_string()).unwrap();
+        assert_eq!(m.entries[0].path_for("slab"), "zsh/.zshrc-slab2");
+
+        // Removing the last variant drops the `paths` table entirely.
+        assert!(remove_entry_path(&mut doc, "zsh", "slab"));
+        assert!(!remove_entry_path(&mut doc, "zsh", "slab"), "second remove is a no-op");
+        assert!(remove_entry_path(&mut doc, "zsh", "cube"));
+        assert!(!doc.to_string().contains("paths"), "empty table removed");
+        let m = Manifest::from_toml(&doc.to_string()).unwrap();
+        assert!(m.entries[0].paths.is_empty());
+    }
+
+    #[test]
+    fn remove_entry_profile_strips_one_tag() {
+        let mut doc = parse(SRC).unwrap();
+        add_entry_profile(&mut doc, "zsh", "slab");
+        add_entry_profile(&mut doc, "zsh", "cube");
+        assert!(remove_entry_profile(&mut doc, "zsh", "slab"));
+        assert!(!remove_entry_profile(&mut doc, "zsh", "slab"), "already gone");
+        assert!(!remove_entry_profile(&mut doc, "tmux", "slab"), "no profiles array");
+
+        let m = Manifest::from_toml(&doc.to_string()).unwrap();
+        assert_eq!(m.entries[0].profiles, ["cube"]);
+
+        // Stripping the last tag makes the entry universal again.
+        assert!(remove_entry_profile(&mut doc, "zsh", "cube"));
+        let m = Manifest::from_toml(&doc.to_string()).unwrap();
+        assert!(m.entries[0].profiles.is_empty());
+        assert!(!doc.to_string().contains("profiles"), "empty array removed");
     }
 }

@@ -10,7 +10,10 @@ use dotfiles_core::{Requires, State};
 
 /// Render one entry's rationale, spec, unrecognized keys, and deploy state.
 pub fn run(ctx: &Ctx, app: &str) -> anyhow::Result<()> {
-    let manifest = ctx.load()?;
+    // Raw first: the resolved view has already flattened variants away, and this
+    // is the one place that wants to name them (ADR-011).
+    let raw = ctx.load_raw()?;
+    let manifest = raw.resolved(&ctx.profile);
     let state = State::derive(&manifest, &ctx.repo_root, &ctx.home);
     let es = state
         .entries
@@ -81,6 +84,21 @@ pub fn run(ctx: &Ctx, app: &str) -> anyhow::Result<()> {
         println!("  {lbl} {}", table::paint("(universal)", table::DIM));
     } else {
         field_list("profiles", &e.profiles);
+    }
+
+    // Content source under the active profile, and any other profile's variant
+    // (ADR-011) — which bytes this machine deploys, and who else differs.
+    let raw_entry = raw.entries.iter().find(|r| r.name == app).expect("same catalog");
+    let origin = if raw_entry.has_variant(&ctx.profile) { "variant" } else { "base" };
+    field("source", &format!("{} ({origin} for {})", e.path, ctx.profile));
+    let others: Vec<String> = raw_entry
+        .paths
+        .iter()
+        .filter(|(p, _)| **p != ctx.profile)
+        .map(|(p, path)| format!("{p} → {path}"))
+        .collect();
+    if !others.is_empty() {
+        field("variants", &others.join(", "));
     }
     Ok(())
 }
