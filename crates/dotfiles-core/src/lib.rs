@@ -59,6 +59,10 @@ pub struct Entry {
     /// profile). Non-empty = active only in the listed profiles.
     #[serde(default)]
     pub profiles: Vec<String>,
+    /// Per-profile content variants (ADR-011): `paths.<profile> = "<path>"`
+    /// overrides `path` for that profile. Absent = every profile takes `path`.
+    #[serde(default)]
+    pub paths: BTreeMap<String, String>,
 }
 
 impl Entry {
@@ -66,6 +70,17 @@ impl Entry {
     /// listed) are active everywhere.
     pub fn active_in(&self, profile: &str) -> bool {
         self.profiles.is_empty() || self.profiles.iter().any(|p| p == profile)
+    }
+
+    /// The source path this entry resolves to under `profile` — its variant if
+    /// one is declared, else the base `path` (ADR-011).
+    pub fn path_for(&self, profile: &str) -> &str {
+        self.paths.get(profile).unwrap_or(&self.path)
+    }
+
+    /// Does `profile` take a variant rather than the base path?
+    pub fn has_variant(&self, profile: &str) -> bool {
+        self.paths.contains_key(profile)
     }
 }
 
@@ -152,6 +167,26 @@ impl Manifest {
     /// Parse a TOML manifest string.
     pub fn from_toml(src: &str) -> Result<Self, toml::de::Error> {
         toml::from_str(src)
+    }
+
+    /// Flatten per-profile variants for `profile` (ADR-011): every entry's
+    /// `path` becomes its `path_for(profile)`, and the now-redundant `paths` map
+    /// is cleared.
+    ///
+    /// Resolution happens once, here at the edge, so everything downstream
+    /// (`deploy`, `deploy_status`, `status`, `list`, `show`) keeps operating on
+    /// a single `path` and needs no notion of profiles.
+    pub fn resolved(&self, profile: &str) -> Self {
+        let entries = self
+            .entries
+            .iter()
+            .map(|e| Entry {
+                path: e.path_for(profile).to_string(),
+                paths: BTreeMap::new(),
+                ..e.clone()
+            })
+            .collect();
+        Manifest { entries, profiles: self.profiles.clone() }
     }
 }
 
@@ -423,6 +458,7 @@ mod tests {
             why: None,
             spec: None,
             profiles: vec![],
+            paths: BTreeMap::new(),
         };
 
         assert_eq!(deploy_status(&entry, &repo, &home), DeployStatus::Missing);
@@ -467,6 +503,38 @@ mod tests {
         assert!(shared.active_in("desktop") && shared.active_in("vm") && shared.active_in("anything"));
         assert!(kde.active_in("desktop"));
         assert!(!kde.active_in("vm"));
+    }
+
+    #[test]
+    fn per_profile_variants_resolve_and_flatten() {
+        let src = r#"
+            [[entry]]
+            name = "nvim"
+            path = "nvim"
+            target = ".config/nvim"
+            paths.slab = "nvim-slab"
+
+            [[entry]]
+            name = "tmux"
+            path = "tmux/.tmux.conf"
+            target = ".tmux.conf"
+        "#;
+        let m = Manifest::from_toml(src).expect("parses");
+        let nvim = &m.entries[0];
+        assert_eq!(nvim.path_for("slab"), "nvim-slab");
+        assert_eq!(nvim.path_for("north"), "nvim", "no variant -> base");
+        assert!(nvim.has_variant("slab") && !nvim.has_variant("north"));
+        // An entry with no `paths` at all resolves to its base everywhere.
+        assert_eq!(m.entries[1].path_for("slab"), "tmux/.tmux.conf");
+
+        // Resolving flattens the override into `path` and empties the map, so
+        // downstream code sees one path per entry.
+        let slab = m.resolved("slab");
+        assert_eq!(slab.entries[0].path, "nvim-slab");
+        assert!(slab.entries[0].paths.is_empty());
+        assert_eq!(m.resolved("north").entries[0].path, "nvim");
+        // Everything else survives the flattening.
+        assert_eq!(slab.entries[0].target, ".config/nvim");
     }
 
     #[test]

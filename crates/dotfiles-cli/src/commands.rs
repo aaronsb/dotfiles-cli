@@ -338,7 +338,7 @@ fn count(repo: &Path, range: &str) -> anyhow::Result<u64> {
     Ok(out.trim().parse().unwrap_or(0))
 }
 
-fn git(repo: &Path, args: &[&str]) -> anyhow::Result<std::process::Output> {
+pub(crate) fn git(repo: &Path, args: &[&str]) -> anyhow::Result<std::process::Output> {
     Command::new("git")
         .arg("-C")
         .arg(repo)
@@ -347,7 +347,7 @@ fn git(repo: &Path, args: &[&str]) -> anyhow::Result<std::process::Output> {
         .map_err(|e| anyhow::anyhow!("running git {args:?}: {e}"))
 }
 
-fn git_stdout(repo: &Path, args: &[&str]) -> anyhow::Result<String> {
+pub(crate) fn git_stdout(repo: &Path, args: &[&str]) -> anyhow::Result<String> {
     let out = git(repo, args)?;
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }

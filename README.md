@@ -56,6 +56,36 @@ why = "Interactive shell baseline — a fresh box behaves like the others withou
 This is the project's payoff: documentation that travels *with* the config and is
 machine-readable, with or without the tooling.
 
+## Profiles
+
+A profile is a named scope — a machine or a role. It decides two things about
+each entry: whether it deploys here (membership, ADR-008), and *which bytes* it
+deploys (content variants, ADR-011).
+
+```toml
+[[entry]]
+name   = "nvim"
+path   = "nvim"            # base — what every profile gets by default
+target = ".config/nvim"
+paths.slab = "nvim-slab"   # …except slab, which has its own copy
+```
+
+Every profile operation addresses a **ref** — `<profile>` for the whole scope,
+`<profile>/<entry>` for one item — so comparing, moving, and dropping share one
+grammar:
+
+```bash
+dotfiles profile diff                  # coverage matrix across all profiles
+dotfiles profile diff slab --details   # active vs slab, with the content diff
+dotfiles profile pull slab/nvim        # take slab's nvim here (creates a variant)
+dotfiles profile push north/nvim slab  # …or send this machine's version there
+dotfiles profile remove slab/nvim      # drop the variant; slab falls back to base
+```
+
+Overwriting an existing variant needs `--force`, and refusing shows the diff that
+justified it. Nothing ever writes onto the base path behind another profile's
+back.
+
 ## Shape (per ADR-001, amended by ADR-007)
 
 - **One core, one CLI surface.** `dotfiles-core` owns manifest parsing, deploy-status

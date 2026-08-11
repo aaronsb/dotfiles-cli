@@ -180,8 +180,16 @@ impl Ctx {
         Ok(Ctx { manifest, repo_root, home, profile })
     }
 
-    /// Read and parse the manifest into the typed catalog.
+    /// Read and parse the manifest into the typed catalog, **resolved for the
+    /// active profile** — per-profile variants are flattened into each entry's
+    /// `path` (ADR-011), so every verb sees the content this machine deploys.
     fn load(&self) -> anyhow::Result<Manifest> {
+        Ok(self.load_raw()?.resolved(&self.profile))
+    }
+
+    /// The manifest exactly as written, variants unflattened. Only the `profile`
+    /// verb — which reasons *about* variants — wants this.
+    fn load_raw(&self) -> anyhow::Result<Manifest> {
         let src = std::fs::read_to_string(&self.manifest)
             .map_err(|e| anyhow::anyhow!("reading {}: {e}", self.manifest.display()))?;
         Ok(Manifest::from_toml(&src)?)
@@ -381,7 +389,9 @@ pub(crate) fn status_view(s: &DeployStatus, enabled: bool) -> (&'static str, &'s
 
 /// `list` — the managed catalog as a table.
 fn list(ctx: &Ctx) -> anyhow::Result<()> {
-    let manifest = ctx.load()?;
+    // Raw, so a path that is this profile's variant can be marked as one rather
+    // than passed off as the entry's base (ADR-011).
+    let manifest = ctx.load_raw()?;
     let mut t = Table::new()
         .title("Managed Dotfiles")
         .column("APP", Align::Left)
@@ -395,10 +405,15 @@ fn list(ctx: &Ctx) -> anyhow::Result<()> {
         } else {
             cell("no").fg(table::DIM)
         };
+        let repo_path = if e.has_variant(&ctx.profile) {
+            cell(format!("{} (variant)", e.path_for(&ctx.profile))).fg(table::CYAN)
+        } else {
+            cell(e.path_for(&ctx.profile))
+        };
         t.row(vec![
             cell(&e.name),
             cell(format!("~/{}", e.target)),
-            cell(&e.path),
+            repo_path,
             enabled,
             cell(e.mode.to_string()),
         ]);
