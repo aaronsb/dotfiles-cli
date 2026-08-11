@@ -30,6 +30,7 @@ _Founding and cross-cutting decisions — tool existence, the shared manifest co
 | [ADR-008](./foundation/ADR-008-profiles-named-scopes-over-dotfiles-and-packages-per-machine-or-role.md) | Profiles — named scopes over dotfiles and packages, per machine or role | Accepted |
 | [ADR-009](./foundation/ADR-009-decline-spec-conformance-the-spec-stays-documentary.md) | Decline spec conformance; the spec stays documentary | Accepted |
 | [ADR-010](./foundation/ADR-010-standalone-claude-settings-projector-for-claude-settings-json.md) | Standalone Claude settings projector for ~/.claude/settings.json | Accepted |
+| [ADR-011](./foundation/ADR-011-per-profile-content-variants-and-a-ref-addressed-profile-crud.md) | Per-profile content variants and a ref-addressed profile CRUD | Draft |
 
 ## Interface
 _Surfaces over the shared core — the non-interactive JSON CLI (agent surface) and the Ratatui TUI (human surface), live-watch presentation_
