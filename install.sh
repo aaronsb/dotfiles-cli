@@ -3,14 +3,14 @@
 # One-line installer for the `dotfiles` CLI — downloads the latest prebuilt
 # binary from GitHub Releases (no Rust toolchain required):
 #
-#   curl -fsSL https://raw.githubusercontent.com/aaronsb/dotfiles-cli/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/dotarchy/dotfiles-cli/main/install.sh | bash
 #
 # Overrides: DOTFILES_BIN_DIR (install location), DOTFILES_VERSION (a tag like
 # v0.1.0 instead of the latest release).
 
 set -euo pipefail
 
-REPO="aaronsb/dotfiles-cli"
+REPO="dotarchy/dotfiles-cli"
 BIN_DIR="${DOTFILES_BIN_DIR:-$HOME/.local/bin}"
 VERSION="${DOTFILES_VERSION:-latest}"
 

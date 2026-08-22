@@ -8,7 +8,7 @@ version = "0.8.2"
 edition = "2024"
 license = "MIT"
 authors = ["Aaron Bockelie"]
-repository = "https://github.com/aaronsb/dotfiles-cli"
+repository = "https://github.com/dotarchy/dotfiles-cli"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

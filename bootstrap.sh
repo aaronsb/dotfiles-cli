@@ -2,13 +2,13 @@
 # Bootstrap a host (ADR-013 §5): install the CLI, run `dotfiles init`, offer a
 # deploy. Safe to re-run — every step is idempotent.
 #
-#   curl -fsSL https://raw.githubusercontent.com/aaronsb/dotfiles-cli/main/bootstrap.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/dotarchy/dotfiles-cli/main/bootstrap.sh | bash
 #
 # Non-interactive: pass init's flags through, e.g.
 #   bash bootstrap.sh --config com.example.dotfiles --remote github --profile north
 set -euo pipefail
 
-REPO="${DOTFILES_CLI_REPO:-aaronsb/dotfiles-cli}"
+REPO="${DOTFILES_CLI_REPO:-dotarchy/dotfiles-cli}"
 BIN_DIR="${DOTFILES_BIN_DIR:-$HOME/.local/bin}"
 
 echo "=== dotfiles bootstrap ==="

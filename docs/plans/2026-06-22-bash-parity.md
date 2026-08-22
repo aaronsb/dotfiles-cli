@@ -113,5 +113,5 @@ Rust tool changes.
 - Rust: `~/.dotfiles/dotfiles-tui/crates/{dotfiles-core,dotfiles-cli}` (on-disk dir
   is still `dotfiles-tui`; renaming it to `dotfiles-cli` to match the repo is a
   later cutover step).
-- Repo: `github.com/aaronsb/dotfiles-cli` (renamed from `dotfiles-tui` 2026-06-22).
+- Repo: `github.com/dotarchy/dotfiles-cli` (renamed from `dotfiles-tui` 2026-06-22; transferred to the dotarchy org 2026-08-22).
 - Live TOML manifest: on branch `feat/toml-manifest` in `~/.dotfiles`.
