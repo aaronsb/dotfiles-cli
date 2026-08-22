@@ -48,3 +48,4 @@ _Distribution and lifecycle — submodule/release install split, version pinning
 | ADR | Title | Status |
 |-----|-------|--------|
 | [ADR-200](./packaging/ADR-200-the-store-pins-the-cli-and-pull-enforces-the-pin.md) | The store pins the CLI and pull enforces the pin | Draft |
+| [ADR-201](./packaging/ADR-201-public-starter-repo-private-downstream-store.md) | Public starter repo, private downstream store | Draft |
