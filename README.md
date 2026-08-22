@@ -6,24 +6,56 @@
 A small, agent-native CLI for a symlink-based dotfiles store, built around a
 **self-documenting manifest**.
 
-> **Status: in progress.** The `dotfiles-core` state model and a `dotfiles status`
-> command exist; the remaining lifecycle verbs (`deploy`/`enable`/`disable`/`add`/
-> `push`) are being ported from the reference bash tool. See
-> [ADR-007](docs/architecture/foundation/) for the current scope.
+## Getting started
 
-## Install
-
-Download the latest prebuilt binary (no Rust toolchain needed):
+One line installs the CLI, binds this machine to a store, and offers a deploy:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/aaronsb/dotfiles-cli/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/aaronsb/dotfiles-cli/main/bootstrap.sh | bash
 ```
 
-This drops a static `dotfiles` into `~/.local/bin`. Pin a version with
-`DOTFILES_VERSION=v0.1.0` or change the location with `DOTFILES_BIN_DIR`. Binaries
-are built in CI (`x86_64-linux`, static musl) and attached to each
-[release](https://github.com/aaronsb/dotfiles-cli/releases). To build from source
-instead: `cargo build --release`.
+> **Don't trust this. Read it first.** The same rule the AUR applies to every
+> package applies here: a script you pipe into `bash` runs with your
+> permissions, in your home directory, and `bootstrap.sh` will offer to
+> overwrite your shell and editor configuration. Fetch it, read it, then run
+> it — it is short on purpose:
+>
+> ```bash
+> curl -fsSLO https://raw.githubusercontent.com/aaronsb/dotfiles-cli/main/bootstrap.sh
+> less bootstrap.sh          # and install.sh, which it calls
+> bash bootstrap.sh
+> ```
+>
+> Everything it does is also a plain `dotfiles` command you can run by hand,
+> and every step previews with `--what-if` / `--dry-run` before it changes
+> anything.
+
+What happens:
+
+1. **Install** — `install.sh` downloads the release binary for your platform
+   into `~/.local/bin` (no Rust toolchain needed). `DOTFILES_VERSION=v0.8.1`
+   pins a release; `DOTFILES_BIN_DIR` moves it. To build from source instead:
+   `cargo build --release`.
+2. **Bind** — `dotfiles init` asks where your store comes from: a published
+   configuration from the [registry](https://github.com/dotarchy/dotfiles)
+   (`sh.dotarchy.starter` is a working, unremarkable default) or a store you
+   already keep in git. It creates the store, optionally a private GitHub
+   remote for it, and writes the host binding at
+   `~/.config/dotfiles/config.toml`.
+3. **Deploy** — `dotfiles deploy --dry-run` shows what would be symlinked;
+   `dotfiles deploy --force` backs up anything in the way to
+   `~/.dotfiles-backup/` and links your configs.
+
+Non-interactive, for a second machine:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/aaronsb/dotfiles-cli/main/bootstrap.sh \
+  | bash -s -- --config com.example.dotfiles --remote github --profile laptop
+```
+
+`dotfiles init` is idempotent — re-running it on a set-up host prints the
+binding and exits — and it is also how a host is reconfigured later
+(`--mode migrate|clean|rebase`; see [Hosts, stores, and the registry](#hosts-stores-and-the-registry)).
 
 ## What this is
 

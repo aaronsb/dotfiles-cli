@@ -325,6 +325,13 @@ fn resolve_active_profile(
 }
 
 fn main() -> anyhow::Result<()> {
+    // Rust ignores SIGPIPE, so `dotfiles status | head` would otherwise panic on
+    // the first write after the reader closes. Die quietly like any other CLI.
+    // SAFETY: called once, before any other thread exists; SIG_DFL is the
+    // default disposition.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     let cli = Cli::parse();
 
     // No subcommand: show the banner and the command list.
