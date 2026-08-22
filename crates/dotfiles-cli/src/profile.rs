@@ -90,7 +90,7 @@ enum ProfileAction {
         #[arg(long, num_args = 0..=1, default_missing_value = "all")]
         pkg: Option<String>,
     },
-    /// Record the active profile in `.dotfiles-profile`.
+    /// Record the active profile in the host binding.
     Use {
         /// Profile name to activate (must be declared).
         name: String,
@@ -790,14 +790,26 @@ fn pkg_sources(arg: Option<&str>) -> Vec<&'static str> {
     }
 }
 
-/// `profile use <name>` — record the active profile in `.dotfiles-profile`.
+/// `profile use <name>` — record the active profile in the host binding
+/// (ADR-013 §3). A host that has not been through `init` gets the legacy
+/// `.dotfiles-profile` file and a pointer at `init`.
 fn use_profile(ctx: &Ctx, name: &str) -> anyhow::Result<()> {
     let manifest = ctx.load_raw()?;
     if !manifest.profiles.contains_key(name) {
         anyhow::bail!("profile '{name}' is not declared — add it first with `profile add {name}`");
     }
-    std::fs::write(ctx.repo_root.join(".dotfiles-profile"), format!("{name}\n"))?;
-    println!("active profile set to '{name}' (wrote .dotfiles-profile).");
+    match ctx.binding.clone() {
+        Some(mut b) if b.store.is_some() => {
+            b.store.as_mut().unwrap().profile = Some(name.to_string());
+            b.save(&ctx.binding_path).map_err(|e| anyhow::anyhow!(e))?;
+            println!("active profile set to '{name}' (wrote {}).", ctx.binding_path.display());
+        }
+        _ => {
+            std::fs::write(ctx.repo_root.join(".dotfiles-profile"), format!("{name}\n"))?;
+            println!("active profile set to '{name}' (wrote .dotfiles-profile).");
+            println!("hint: run `dotfiles init` to move this host onto a binding (ADR-013).");
+        }
+    }
     Ok(())
 }
 
