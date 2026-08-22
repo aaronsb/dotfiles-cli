@@ -162,8 +162,15 @@ cannot conflict, because the variant file is theirs and only the base moves.
 A registry entry is a subdirectory of another repo, so the store's upstream
 relationship is a subtree, not a remote:
 
-- **down** — `dotfiles store upstream pull` runs `git subtree pull --squash`
-  against `configs/<id>` of the registry and reports the result as a diff.
+- **down** — `dotfiles store upstream pull` splits `configs/<id>` of the
+  registry into a root-relative history (`git subtree split`), fetches it, and
+  merges. A registry entry never carries store-only content, so the merge
+  **cannot delete it**: `packages/`, `.dotfiles-cli.version`, `.gitignore`,
+  the store's README and CLAUDE.md are restored if upstream lacks them, and
+  the manifest's `[profiles.*]` tables and `paths.*` variants are grafted
+  back onto the merged manifest. First install is the same fetch onto an
+  empty repo, so the store begins with the entry's history and later pulls
+  are ordinary related merges.
 - **up** — `dotfiles publish` runs `git subtree split` on the store, strips
   `[profiles.*]`, `paths.*`, and `packages/` from the split, pushes the result to
   a branch on the operator's fork of the registry, and opens a pull request

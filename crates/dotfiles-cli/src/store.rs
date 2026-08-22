@@ -222,15 +222,24 @@ pub fn merge_entry(
     if !dirty.trim().is_empty() {
         anyhow::bail!("the store has uncommitted changes; commit or stash them, then re-run");
     }
-    let mut argv = vec!["merge", "--no-edit", "-m", msg];
+    let mut argv = vec!["merge", "--no-commit", "--no-ff"];
     if !related {
         argv.push("--allow-unrelated-histories");
     }
     argv.push("FETCH_HEAD");
     let out = git(store, &argv)?;
+    // Whether or not the merge stopped, put back what upstream can never own.
+    restore_store_only(store)?;
     if !out.status.success() {
         report_conflicts(store)?;
         anyhow::bail!("merge stopped on conflicts — resolve, commit, then re-run");
+    }
+    let out = git(store, &["commit", "--quiet", "-m", msg])?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "git commit failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
     }
     println!(
         "merged {} from {id}:",
@@ -245,6 +254,51 @@ pub fn merge_entry(
         git_stdout(store, &["diff", "--stat", "HEAD~1..HEAD"])?
     );
     Ok(Merge::Merged)
+}
+
+/// Paths a registry entry never carries (ADR-013 §1). An upstream merge may
+/// add or change anything else; it may not delete these.
+pub const STORE_ONLY: &[&str] = &[
+    "packages",
+    ".dotfiles-cli.version",
+    ".gitignore",
+    "readme.md",
+    "README.md",
+    "CLAUDE.md",
+];
+
+/// After a `--no-commit` merge: un-delete store-only paths the upstream lacks,
+/// and graft the store's profile tables and variants back onto the manifest.
+fn restore_store_only(store: &Path) -> anyhow::Result<()> {
+    let deleted = git_stdout(
+        store,
+        &["diff", "--cached", "--name-only", "--diff-filter=D"],
+    )?;
+    for path in deleted.lines() {
+        let top = path.split('/').next().unwrap_or(path);
+        if STORE_ONLY.contains(&top) {
+            git(store, &["checkout", "--quiet", "ORIG_HEAD", "--", path])?;
+        }
+    }
+    let manifest = store.join(".dotfiles-manifest.toml");
+    let conflicted = git_stdout(store, &["diff", "--name-only", "--diff-filter=U"])?;
+    if conflicted.lines().any(|l| l == ".dotfiles-manifest.toml") || !manifest.exists() {
+        return Ok(());
+    }
+    let before = git_stdout(store, &["show", "ORIG_HEAD:.dotfiles-manifest.toml"])?;
+    let Ok(before) = dotfiles_core::edit::parse(&before) else {
+        return Ok(());
+    };
+    let after_src = std::fs::read_to_string(&manifest)?;
+    let mut after = dotfiles_core::edit::parse(&after_src)
+        .map_err(|e| anyhow::anyhow!("merged manifest does not parse: {e}"))?;
+    dotfiles_core::edit::graft_store_sections(&mut after, &before);
+    let out = after.to_string();
+    if out != after_src {
+        std::fs::write(&manifest, out)?;
+        git(store, &["add", ".dotfiles-manifest.toml"])?;
+    }
+    Ok(())
 }
 
 /// Print the files a stopped merge left conflicted.

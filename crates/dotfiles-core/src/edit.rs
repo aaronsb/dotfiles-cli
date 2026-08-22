@@ -26,7 +26,11 @@ pub struct NewEntry<'a> {
 
 /// Borrow the `[[entry]]` array of tables, creating an empty one if absent.
 fn entries_mut(doc: &mut DocumentMut) -> &mut ArrayOfTables {
-    if doc.get("entry").and_then(Item::as_array_of_tables).is_none() {
+    if doc
+        .get("entry")
+        .and_then(Item::as_array_of_tables)
+        .is_none()
+    {
         doc["entry"] = Item::ArrayOfTables(ArrayOfTables::new());
     }
     doc["entry"]
@@ -93,7 +97,9 @@ fn profiles_mut(doc: &mut DocumentMut) -> &mut Table {
         t.set_implicit(true);
         doc["profiles"] = Item::Table(t);
     }
-    doc["profiles"].as_table_mut().expect("just ensured it is a table")
+    doc["profiles"]
+        .as_table_mut()
+        .expect("just ensured it is a table")
 }
 
 /// Declare a profile `[profiles.<name>]`. Errors if it already exists.
@@ -153,7 +159,9 @@ pub fn remove_profile(doc: &mut DocumentMut, name: &str) -> bool {
 /// if no entry has that name.
 pub fn add_entry_profile(doc: &mut DocumentMut, entry: &str, profile: &str) -> bool {
     let aot = entries_mut(doc);
-    let Some(i) = index_of(aot, entry) else { return false };
+    let Some(i) = index_of(aot, entry) else {
+        return false;
+    };
     let t = aot.get_mut(i).expect("index from position");
     if t.get("profiles").and_then(Item::as_array).is_none() {
         t["profiles"] = value(Array::new());
@@ -172,14 +180,18 @@ pub fn add_entry_profile(doc: &mut DocumentMut, entry: &str, profile: &str) -> b
 /// rather than opening a sub-table. Returns `false` if no entry has that name.
 pub fn set_entry_path(doc: &mut DocumentMut, entry: &str, profile: &str, path: &str) -> bool {
     let aot = entries_mut(doc);
-    let Some(i) = index_of(aot, entry) else { return false };
+    let Some(i) = index_of(aot, entry) else {
+        return false;
+    };
     let t = aot.get_mut(i).expect("index from position");
     if t.get("paths").and_then(Item::as_table).is_none() {
         let mut paths = Table::new();
         paths.set_dotted(true);
         t.insert("paths", Item::Table(paths));
     }
-    let paths = t["paths"].as_table_mut().expect("just ensured it is a table");
+    let paths = t["paths"]
+        .as_table_mut()
+        .expect("just ensured it is a table");
     paths.set_dotted(true);
     paths[profile] = value(path);
     true
@@ -190,9 +202,13 @@ pub fn set_entry_path(doc: &mut DocumentMut, entry: &str, profile: &str, path: &
 /// was actually there.
 pub fn remove_entry_path(doc: &mut DocumentMut, entry: &str, profile: &str) -> bool {
     let aot = entries_mut(doc);
-    let Some(i) = index_of(aot, entry) else { return false };
+    let Some(i) = index_of(aot, entry) else {
+        return false;
+    };
     let t = aot.get_mut(i).expect("index from position");
-    let Some(paths) = t.get_mut("paths").and_then(Item::as_table_mut) else { return false };
+    let Some(paths) = t.get_mut("paths").and_then(Item::as_table_mut) else {
+        return false;
+    };
     let existed = paths.remove(profile).is_some();
     if paths.is_empty() {
         t.remove("paths");
@@ -204,9 +220,13 @@ pub fn remove_entry_path(doc: &mut DocumentMut, entry: &str, profile: &str) -> b
 /// becomes universal again). Returns whether the tag was there.
 pub fn remove_entry_profile(doc: &mut DocumentMut, entry: &str, profile: &str) -> bool {
     let aot = entries_mut(doc);
-    let Some(i) = index_of(aot, entry) else { return false };
+    let Some(i) = index_of(aot, entry) else {
+        return false;
+    };
     let t = aot.get_mut(i).expect("index from position");
-    let Some(arr) = t.get_mut("profiles").and_then(Item::as_array_mut) else { return false };
+    let Some(arr) = t.get_mut("profiles").and_then(Item::as_array_mut) else {
+        return false;
+    };
     let before = arr.len();
     arr.retain(|v| v.as_str() != Some(profile));
     let removed = arr.len() != before;
@@ -253,7 +273,13 @@ target = ".tmux.conf"
         let mut doc = parse(SRC).unwrap();
         add_entry(
             &mut doc,
-            NewEntry { name: "nvim", path: "nvim", target: ".config/nvim", mode: Mode::Symlink, why: Some("editor") },
+            NewEntry {
+                name: "nvim",
+                path: "nvim",
+                target: ".config/nvim",
+                mode: Mode::Symlink,
+                why: Some("editor"),
+            },
         )
         .unwrap();
         let out = doc.to_string();
@@ -266,7 +292,13 @@ target = ".tmux.conf"
 
         let dup = add_entry(
             &mut doc,
-            NewEntry { name: "nvim", path: "x", target: "y", mode: Mode::Symlink, why: None },
+            NewEntry {
+                name: "nvim",
+                path: "x",
+                target: "y",
+                mode: Mode::Symlink,
+                why: None,
+            },
         );
         assert!(dup.is_err());
     }
@@ -286,7 +318,10 @@ target = ".tmux.conf"
         let mut doc = parse(SRC).unwrap();
         add_profile(&mut doc, "desktop", Some("workstation"), None).unwrap();
         add_profile(&mut doc, "vm", None, Some("vm-*")).unwrap();
-        assert!(add_profile(&mut doc, "desktop", None, None).is_err(), "duplicate rejected");
+        assert!(
+            add_profile(&mut doc, "desktop", None, None).is_err(),
+            "duplicate rejected"
+        );
 
         // tag zsh into desktop, then remove the profile and confirm the tag is stripped.
         assert!(add_entry_profile(&mut doc, "zsh", "desktop"));
@@ -295,15 +330,31 @@ target = ".tmux.conf"
 
         let m = Manifest::from_toml(&doc.to_string()).unwrap();
         assert_eq!(m.profiles["vm"].match_pattern.as_deref(), Some("vm-*"));
-        assert_eq!(m.entries.iter().find(|e| e.name == "zsh").unwrap().profiles, ["desktop"]);
-        assert!(doc.to_string().contains("# a manifest"), "comment preserved");
+        assert_eq!(
+            m.entries.iter().find(|e| e.name == "zsh").unwrap().profiles,
+            ["desktop"]
+        );
+        assert!(
+            doc.to_string().contains("# a manifest"),
+            "comment preserved"
+        );
 
         assert!(remove_profile(&mut doc, "desktop"));
         let m = Manifest::from_toml(&doc.to_string()).unwrap();
         assert!(!m.profiles.contains_key("desktop"));
         // zsh's only profile was desktop -> stripped -> universal again.
-        assert!(m.entries.iter().find(|e| e.name == "zsh").unwrap().profiles.is_empty());
-        assert!(!remove_profile(&mut doc, "desktop"), "second remove is a no-op");
+        assert!(
+            m.entries
+                .iter()
+                .find(|e| e.name == "zsh")
+                .unwrap()
+                .profiles
+                .is_empty()
+        );
+        assert!(
+            !remove_profile(&mut doc, "desktop"),
+            "second remove is a no-op"
+        );
     }
 
     #[test]
@@ -314,7 +365,10 @@ target = ".tmux.conf"
         assert!(!set_entry_path(&mut doc, "ghost", "slab", "x"));
 
         let out = doc.to_string();
-        assert!(out.contains(r#"paths.slab = "zsh/.zshrc-slab""#), "dotted, not a sub-table: {out}");
+        assert!(
+            out.contains(r#"paths.slab = "zsh/.zshrc-slab""#),
+            "dotted, not a sub-table: {out}"
+        );
         assert!(out.contains("# a manifest"), "comment preserved");
         assert!(out.contains(r#"why = "shell baseline""#), "why preserved");
 
@@ -322,7 +376,11 @@ target = ".tmux.conf"
         let zsh = m.entries.iter().find(|e| e.name == "zsh").unwrap();
         assert_eq!(zsh.path_for("slab"), "zsh/.zshrc-slab");
         assert_eq!(zsh.path_for("cube"), "zsh/.zshrc-cube");
-        assert_eq!(zsh.path_for("north"), "zsh/.zshrc", "untouched profiles keep the base");
+        assert_eq!(
+            zsh.path_for("north"),
+            "zsh/.zshrc",
+            "untouched profiles keep the base"
+        );
 
         // Overwriting an existing variant replaces it in place.
         assert!(set_entry_path(&mut doc, "zsh", "slab", "zsh/.zshrc-slab2"));
@@ -331,7 +389,10 @@ target = ".tmux.conf"
 
         // Removing the last variant drops the `paths` table entirely.
         assert!(remove_entry_path(&mut doc, "zsh", "slab"));
-        assert!(!remove_entry_path(&mut doc, "zsh", "slab"), "second remove is a no-op");
+        assert!(
+            !remove_entry_path(&mut doc, "zsh", "slab"),
+            "second remove is a no-op"
+        );
         assert!(remove_entry_path(&mut doc, "zsh", "cube"));
         assert!(!doc.to_string().contains("paths"), "empty table removed");
         let m = Manifest::from_toml(&doc.to_string()).unwrap();
@@ -344,8 +405,14 @@ target = ".tmux.conf"
         add_entry_profile(&mut doc, "zsh", "slab");
         add_entry_profile(&mut doc, "zsh", "cube");
         assert!(remove_entry_profile(&mut doc, "zsh", "slab"));
-        assert!(!remove_entry_profile(&mut doc, "zsh", "slab"), "already gone");
-        assert!(!remove_entry_profile(&mut doc, "tmux", "slab"), "no profiles array");
+        assert!(
+            !remove_entry_profile(&mut doc, "zsh", "slab"),
+            "already gone"
+        );
+        assert!(
+            !remove_entry_profile(&mut doc, "tmux", "slab"),
+            "no profiles array"
+        );
 
         let m = Manifest::from_toml(&doc.to_string()).unwrap();
         assert_eq!(m.entries[0].profiles, ["cube"]);
@@ -355,5 +422,81 @@ target = ".tmux.conf"
         let m = Manifest::from_toml(&doc.to_string()).unwrap();
         assert!(m.entries[0].profiles.is_empty());
         assert!(!doc.to_string().contains("profiles"), "empty array removed");
+    }
+}
+
+/// Carry the store's profile tables and per-entry `paths.*` variants from
+/// `store` onto `merged`, which came from a registry entry that never has
+/// them (ADR-013 §1, §6). Entries are matched by `name`; a variant whose entry
+/// the upstream dropped is dropped with it.
+pub fn graft_store_sections(merged: &mut DocumentMut, store: &DocumentMut) {
+    if let Some(profiles) = store.get("profiles") {
+        merged["profiles"] = profiles.clone();
+    }
+    let Some(src) = store.get("entry").and_then(Item::as_array_of_tables) else {
+        return;
+    };
+    let variants: Vec<(String, Item)> = src
+        .iter()
+        .filter_map(|t| {
+            let name = t.get("name")?.as_str()?.to_string();
+            let paths = t.get("paths")?.clone();
+            Some((name, paths))
+        })
+        .collect();
+    if variants.is_empty() {
+        return;
+    }
+    let dst = entries_mut(merged);
+    for (name, paths) in variants {
+        if let Some(i) = index_of(dst, &name)
+            && let Some(t) = dst.get_mut(i)
+        {
+            t["paths"] = paths;
+        }
+    }
+}
+
+#[cfg(test)]
+mod graft_tests {
+    use super::*;
+
+    #[test]
+    fn graft_restores_profiles_and_variants_by_name() {
+        let store = parse(
+            r#"
+[[entry]]
+name = "nvim"
+path = "nvim"
+target = ".config/nvim"
+paths.slab = "nvim-slab"
+
+[[entry]]
+name = "gone"
+path = "gone"
+target = ".gone"
+paths.slab = "gone-slab"
+
+[profiles.slab]
+description = "laptop"
+"#,
+        )
+        .unwrap();
+        let mut merged = parse(
+            r#"
+[[entry]]
+name = "nvim"
+path = "nvim"
+target = ".config/nvim"
+why = "upstream changed this"
+"#,
+        )
+        .unwrap();
+        graft_store_sections(&mut merged, &store);
+        let out = merged.to_string();
+        assert!(out.contains("[profiles.slab]"));
+        assert!(out.contains("nvim-slab"));
+        assert!(out.contains("upstream changed this"));
+        assert!(!out.contains("gone-slab"));
     }
 }
