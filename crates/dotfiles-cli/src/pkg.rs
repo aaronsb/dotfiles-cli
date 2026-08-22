@@ -79,12 +79,20 @@ fn capture(packages_dir: &Path, host: &str) -> anyhow::Result<()> {
     let mut captured = false;
     for src in Source::ALL {
         if !source_available(src) {
-            t.row(vec![cell(src.name()), cell("-").fg(table::DIM), cell("not available here").fg(table::DIM)]);
+            t.row(vec![
+                cell(src.name()),
+                cell("-").fg(table::DIM),
+                cell("not available here").fg(table::DIM),
+            ]);
             continue;
         }
         let list = live_list(src);
         let file = dir.join(format!("{}.txt", src.name()));
-        let body = if list.is_empty() { String::new() } else { format!("{}\n", list.join("\n")) };
+        let body = if list.is_empty() {
+            String::new()
+        } else {
+            format!("{}\n", list.join("\n"))
+        };
         std::fs::write(&file, body)?;
         t.row(vec![
             cell(src.name()),
@@ -110,7 +118,9 @@ fn status(packages_dir: &Path, host: &str, local: &str) -> anyhow::Result<()> {
     // Remote host: report tracked desired state only.
     if !is_local {
         let mut t = Table::new()
-            .title(format!("Package status for '{host}' (remote — tracked only)"))
+            .title(format!(
+                "Package status for '{host}' (remote — tracked only)"
+            ))
             .column("SOURCE", Align::Left)
             .column("TRACKED", Align::Right);
         let mut any = false;
@@ -119,7 +129,10 @@ fn status(packages_dir: &Path, host: &str, local: &str) -> anyhow::Result<()> {
                 continue;
             }
             any = true;
-            t.row(vec![cell(src.name()), cell(read_tracked(packages_dir, host, src).len().to_string())]);
+            t.row(vec![
+                cell(src.name()),
+                cell(read_tracked(packages_dir, host, src).len().to_string()),
+            ]);
         }
         if any {
             t.print();
@@ -147,12 +160,26 @@ fn status(packages_dir: &Path, host: &str, local: &str) -> anyhow::Result<()> {
         }
         any = true;
         if !has_file {
-            t.row(vec![cell(src.name()), cell("-").fg(table::DIM), cell("-").fg(table::DIM), cell("-").fg(table::DIM), cell("-").fg(table::DIM), cell("untracked — run capture").fg(table::YELLOW)]);
+            t.row(vec![
+                cell(src.name()),
+                cell("-").fg(table::DIM),
+                cell("-").fg(table::DIM),
+                cell("-").fg(table::DIM),
+                cell("-").fg(table::DIM),
+                cell("untracked — run capture").fg(table::YELLOW),
+            ]);
             continue;
         }
         if !available {
             let tracked = read_tracked(packages_dir, host, src);
-            t.row(vec![cell(src.name()), cell(tracked.len().to_string()), cell("-").fg(table::DIM), cell("-").fg(table::DIM), cell("-").fg(table::DIM), cell("source not installed").fg(table::DIM)]);
+            t.row(vec![
+                cell(src.name()),
+                cell(tracked.len().to_string()),
+                cell("-").fg(table::DIM),
+                cell("-").fg(table::DIM),
+                cell("-").fg(table::DIM),
+                cell("source not installed").fg(table::DIM),
+            ]);
             continue;
         }
         let tracked = read_tracked(packages_dir, host, src);
@@ -172,10 +199,20 @@ fn status(packages_dir: &Path, host: &str, local: &str) -> anyhow::Result<()> {
             cell(state).fg(state_color),
         ]);
         if !d.missing.is_empty() {
-            details.push(format!("  {} to install ({}): {}", src.name(), d.missing.len(), d.missing.join(" ")));
+            details.push(format!(
+                "  {} to install ({}): {}",
+                src.name(),
+                d.missing.len(),
+                d.missing.join(" ")
+            ));
         }
         if !d.extra.is_empty() {
-            details.push(format!("  {} untracked ({}): {}", src.name(), d.extra.len(), d.extra.join(" ")));
+            details.push(format!(
+                "  {} untracked ({}): {}",
+                src.name(),
+                d.extra.len(),
+                d.extra.join(" ")
+            ));
         }
     }
 
@@ -196,7 +233,11 @@ fn status(packages_dir: &Path, host: &str, local: &str) -> anyhow::Result<()> {
 /// A right-aligned count cell: colored when non-zero, dim when zero.
 fn count_cell(n: usize, nonzero: &'static str) -> Cell {
     let c = cell(n.to_string());
-    if n > 0 { c.fg(nonzero) } else { c.fg(table::DIM) }
+    if n > 0 {
+        c.fg(nonzero)
+    } else {
+        c.fg(table::DIM)
+    }
 }
 
 /// `pkg sync` — install tracked-but-missing; with `--prune`, remove untracked.
@@ -217,25 +258,47 @@ fn sync(packages_dir: &Path, local: &str, prune: bool, dry_run: bool) -> anyhow:
             continue;
         }
         if !source_available(src) {
-            println!("{}: tracked but {} not installed here — skipped", src.name(), src.name());
+            println!(
+                "{}: tracked but {} not installed here — skipped",
+                src.name(),
+                src.name()
+            );
             continue;
         }
         let d = pkg::drift(&read_tracked(packages_dir, host, src), &live_list(src));
         if !d.missing.is_empty() {
             acted = true;
             if dry_run {
-                println!("{}: would install {}: {}", src.name(), d.missing.len(), table::paint(&d.missing.join(" "), table::YELLOW));
+                println!(
+                    "{}: would install {}: {}",
+                    src.name(),
+                    d.missing.len(),
+                    table::paint(&d.missing.join(" "), table::YELLOW)
+                );
             } else {
-                println!("{}: installing {} missing package(s)...", src.name(), d.missing.len());
+                println!(
+                    "{}: installing {} missing package(s)...",
+                    src.name(),
+                    d.missing.len()
+                );
                 install(src, &d.missing)?;
             }
         }
         if prune && !d.extra.is_empty() {
             acted = true;
             if dry_run {
-                println!("{}: would remove {}: {}", src.name(), d.extra.len(), table::paint(&d.extra.join(" "), table::RED));
+                println!(
+                    "{}: would remove {}: {}",
+                    src.name(),
+                    d.extra.len(),
+                    table::paint(&d.extra.join(" "), table::RED)
+                );
             } else {
-                println!("{}: removing {} untracked package(s)...", src.name(), d.extra.len());
+                println!(
+                    "{}: removing {} untracked package(s)...",
+                    src.name(),
+                    d.extra.len()
+                );
                 remove(src, &d.extra)?;
             }
         }
@@ -287,10 +350,18 @@ fn diff_pair(packages_dir: &Path, a: &str, b: &str) -> anyhow::Result<()> {
             cell(p.only_b.len().to_string()),
         ]);
         if !p.only_a.is_empty() {
-            details.push(format!("  {} only on {a}: {}", src.name(), p.only_a.join(" ")));
+            details.push(format!(
+                "  {} only on {a}: {}",
+                src.name(),
+                p.only_a.join(" ")
+            ));
         }
         if !p.only_b.is_empty() {
-            details.push(format!("  {} only on {b}: {}", src.name(), p.only_b.join(" ")));
+            details.push(format!(
+                "  {} only on {b}: {}",
+                src.name(),
+                p.only_b.join(" ")
+            ));
         }
     }
     t.print();
@@ -308,7 +379,10 @@ fn diff_pair(packages_dir: &Path, a: &str, b: &str) -> anyhow::Result<()> {
 fn diff_all(packages_dir: &Path) -> anyhow::Result<()> {
     let hosts = tracked_hosts(packages_dir);
     if hosts.len() < 2 {
-        anyhow::bail!("need at least 2 tracked hosts to diff (have {}).", hosts.len());
+        anyhow::bail!(
+            "need at least 2 tracked hosts to diff (have {}).",
+            hosts.len()
+        );
     }
     let mut t = Table::new()
         .title(format!("packages across {} hosts", hosts.len()))
@@ -331,7 +405,12 @@ fn diff_all(packages_dir: &Path) -> anyhow::Result<()> {
                 Some((_, uniq)) => {
                     row.push(count_cell(uniq.len(), table::CYAN));
                     if !uniq.is_empty() {
-                        details.push(format!("  {}/{h} unique ({}): {}", src.name(), uniq.len(), uniq.join(" ")));
+                        details.push(format!(
+                            "  {}/{h} unique ({}): {}",
+                            src.name(),
+                            uniq.len(),
+                            uniq.join(" ")
+                        ));
                     }
                 }
                 None => row.push(cell("-").fg(table::DIM)),
@@ -433,9 +512,8 @@ fn query(cmd: &str, args: &[&str]) -> Vec<String> {
 
 /// Does `name` resolve on `$PATH`?
 fn on_path(name: &str) -> bool {
-    std::env::var_os("PATH").is_some_and(|paths| {
-        std::env::split_paths(&paths).any(|dir| dir.join(name).is_file())
-    })
+    std::env::var_os("PATH")
+        .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(name).is_file()))
 }
 
 /// Install a package set (additive). Stdio is inherited so the package

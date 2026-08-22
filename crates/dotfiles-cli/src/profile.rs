@@ -115,9 +115,11 @@ struct TransferOpts {
 pub fn run(ctx: &Ctx, args: &ProfileArgs) -> anyhow::Result<()> {
     match args.action.as_ref() {
         None | Some(ProfileAction::List) => list(ctx),
-        Some(ProfileAction::Add { name, desc, match_pattern }) => {
-            add(ctx, name, desc.as_deref(), match_pattern.as_deref())
-        }
+        Some(ProfileAction::Add {
+            name,
+            desc,
+            match_pattern,
+        }) => add(ctx, name, desc.as_deref(), match_pattern.as_deref()),
         Some(ProfileAction::Remove { target, purge }) => remove(ctx, target, *purge),
         Some(ProfileAction::Diff { refs, details }) => diff(ctx, refs, *details),
         Some(ProfileAction::Push { src, dst, opts }) => transfer(ctx, src, dst, opts),
@@ -125,9 +127,13 @@ pub fn run(ctx: &Ctx, args: &ProfileArgs) -> anyhow::Result<()> {
             let dst = dst.clone().unwrap_or_else(|| ctx.profile.clone());
             transfer(ctx, src, &dst, opts)
         }
-        Some(ProfileAction::Copy { src, dst, only, dotfiles, pkg }) => {
-            copy(ctx, src, dst, only.as_deref(), *dotfiles, pkg.as_deref())
-        }
+        Some(ProfileAction::Copy {
+            src,
+            dst,
+            only,
+            dotfiles,
+            pkg,
+        }) => copy(ctx, src, dst, only.as_deref(), *dotfiles, pkg.as_deref()),
         Some(ProfileAction::Use { name }) => use_profile(ctx, name),
     }
 }
@@ -206,29 +212,51 @@ fn list(ctx: &Ctx) -> anyhow::Result<()> {
         } else {
             cell(format!("  {name}"))
         };
-        let entries = manifest.entries.iter().filter(|e| e.active_in(name)).count();
-        let variants = manifest.entries.iter().filter(|e| e.has_variant(name)).count();
+        let entries = manifest
+            .entries
+            .iter()
+            .filter(|e| e.active_in(name))
+            .count();
+        let variants = manifest
+            .entries
+            .iter()
+            .filter(|e| e.has_variant(name))
+            .count();
         t.row(vec![
             name_cell,
             cell(p.match_pattern.clone().unwrap_or_default()),
             cell(entries.to_string()),
-            cell(if variants == 0 { String::new() } else { variants.to_string() }),
+            cell(if variants == 0 {
+                String::new()
+            } else {
+                variants.to_string()
+            }),
             cell(p.description.clone().unwrap_or_default()),
         ]);
     }
     t.print();
-    println!("\nActive profile: {}", table::paint(&ctx.profile, table::GREEN));
+    println!(
+        "\nActive profile: {}",
+        table::paint(&ctx.profile, table::GREEN)
+    );
     if !manifest.profiles.contains_key(&ctx.profile) {
-        println!("(not a declared profile — used implicitly; `dotfiles profile add {}` to declare it)", ctx.profile);
+        println!(
+            "(not a declared profile — used implicitly; `dotfiles profile add {}` to declare it)",
+            ctx.profile
+        );
     }
     Ok(())
 }
 
 /// `profile add <name>` — declare a profile and create its package dir.
-fn add(ctx: &Ctx, name: &str, desc: Option<&str>, match_pattern: Option<&str>) -> anyhow::Result<()> {
+fn add(
+    ctx: &Ctx,
+    name: &str,
+    desc: Option<&str>,
+    match_pattern: Option<&str>,
+) -> anyhow::Result<()> {
     let mut doc = edit::parse(&read_src(ctx)?)?;
-    edit::add_profile(&mut doc, name, desc, match_pattern)
-        .map_err(|e| anyhow::anyhow!(e))?;
+    edit::add_profile(&mut doc, name, desc, match_pattern).map_err(|e| anyhow::anyhow!(e))?;
     std::fs::write(&ctx.manifest, doc.to_string())?;
     std::fs::create_dir_all(ctx.repo_root.join("packages").join(name))?;
     println!("added profile '{name}'");
@@ -306,7 +334,10 @@ fn remove_item(ctx: &Ctx, profile: &str, entry: &str, purge: bool) -> anyhow::Re
     if let Some(variant) = e.paths.get(profile).cloned() {
         edit::remove_entry_path(&mut doc, entry, profile);
         std::fs::write(&ctx.manifest, doc.to_string())?;
-        println!("'{entry}' in '{profile}' now falls back to the base path '{}'.", e.path);
+        println!(
+            "'{entry}' in '{profile}' now falls back to the base path '{}'.",
+            e.path
+        );
         if purge {
             // Only ever delete a path that nothing else still points at.
             if variant == e.path || e.paths.iter().any(|(p, v)| p != profile && *v == variant) {
@@ -337,7 +368,11 @@ fn remove_item(ctx: &Ctx, profile: &str, entry: &str, purge: bool) -> anyhow::Re
     anyhow::bail!(
         "'{profile}' has neither a variant nor an explicit membership for '{entry}' — nothing to remove \
          (it is {})",
-        if e.active_in(profile) { "universal, so active everywhere" } else { "not in that profile" }
+        if e.active_in(profile) {
+            "universal, so active everywhere"
+        } else {
+            "not in that profile"
+        }
     )
 }
 
@@ -393,15 +428,29 @@ impl Side {
 /// `profile diff [<a>] [<b>] [--details]`.
 fn diff(ctx: &Ctx, refs: &[String], details: bool) -> anyhow::Result<()> {
     let manifest = ctx.load_raw()?;
-    let parsed: Vec<Ref> = refs.iter().map(|s| parse_ref(s)).collect::<Result<_, _>>()?;
+    let parsed: Vec<Ref> = refs
+        .iter()
+        .map(|s| parse_ref(s))
+        .collect::<Result<_, _>>()?;
     match parsed.len() {
         0 => {
             if details {
-                anyhow::bail!("--details needs two profiles to compare — e.g. `profile diff slab --details`");
+                anyhow::bail!(
+                    "--details needs two profiles to compare — e.g. `profile diff slab --details`"
+                );
             }
             matrix(ctx, &manifest)
         }
-        1 => pair(ctx, &manifest, &Ref { profile: ctx.profile.clone(), entry: None }, &parsed[0], details),
+        1 => pair(
+            ctx,
+            &manifest,
+            &Ref {
+                profile: ctx.profile.clone(),
+                entry: None,
+            },
+            &parsed[0],
+            details,
+        ),
         2 => pair(ctx, &manifest, &parsed[0], &parsed[1], details),
         n => anyhow::bail!("expected at most two refs to compare, got {n}"),
     }
@@ -421,7 +470,11 @@ fn matrix(ctx: &Ctx, manifest: &Manifest) -> anyhow::Result<()> {
         .title("Profiles — entry coverage")
         .column("ENTRY", Align::Left);
     for n in &names {
-        let header = if *n == ctx.profile { format!("● {n}") } else { n.clone() };
+        let header = if *n == ctx.profile {
+            format!("● {n}")
+        } else {
+            n.clone()
+        };
         t = t.column(header, Align::Left);
     }
     for e in &manifest.entries {
@@ -455,7 +508,9 @@ fn pair(ctx: &Ctx, manifest: &Manifest, a: &Ref, b: &Ref, details: bool) -> anyh
     }
     let only = match (&a.entry, &b.entry) {
         (Some(x), Some(y)) if x != y => {
-            anyhow::bail!("refs name different entries ('{x}' vs '{y}') — a diff compares one entry across profiles")
+            anyhow::bail!(
+                "refs name different entries ('{x}' vs '{y}') — a diff compares one entry across profiles"
+            )
         }
         (Some(x), _) | (_, Some(x)) => Some(x.clone()),
         (None, None) => None,
@@ -528,14 +583,20 @@ fn pair(ctx: &Ctx, manifest: &Manifest, a: &Ref, b: &Ref, details: bool) -> anyh
     println!("\n{}", table::paint(&summary, table::DIM));
     println!(
         "{}",
-        table::paint("Package lists are compared separately: `dotfiles pkg diff <a> <b>`.", table::DIM)
+        table::paint(
+            "Package lists are compared separately: `dotfiles pkg diff <a> <b>`.",
+            table::DIM
+        )
     );
 
     if details {
         for (name, x, y) in &differing {
             println!(
                 "\n{}",
-                table::paint(&format!("── {name}: {} → {} ──", a.profile, b.profile), table::BOLD)
+                table::paint(
+                    &format!("── {name}: {} → {} ──", a.profile, b.profile),
+                    table::BOLD
+                )
             );
             print!("{}", diff_view::render(&raw_diff(&ctx.repo_root, x, y)?));
         }
@@ -573,11 +634,17 @@ fn raw_diff(repo: &Path, a: &str, b: &str) -> anyhow::Result<String> {
 fn transfer(ctx: &Ctx, src: &str, dst: &str, opts: &TransferOpts) -> anyhow::Result<()> {
     let (s, d) = (parse_ref(src)?, parse_ref(dst)?);
     if s.profile == d.profile && s.entry.is_none() {
-        anyhow::bail!("source and destination profiles are the same ('{}')", s.profile);
+        anyhow::bail!(
+            "source and destination profiles are the same ('{}')",
+            s.profile
+        );
     }
     let manifest = ctx.load_raw()?;
     if !manifest.profiles.contains_key(&d.profile) {
-        anyhow::bail!("destination profile '{}' is not declared — add it first", d.profile);
+        anyhow::bail!(
+            "destination profile '{}' is not declared — add it first",
+            d.profile
+        );
     }
     match (&s.entry, &d.entry) {
         (Some(e), Some(f)) if e != f => anyhow::bail!(
@@ -592,7 +659,13 @@ fn transfer(ctx: &Ctx, src: &str, dst: &str, opts: &TransferOpts) -> anyhow::Res
 
 /// Move one entry's content from `src` to `dst`, creating or overwriting the
 /// destination's variant (ADR-011 §4).
-fn push_item(ctx: &Ctx, src: &str, dst: &str, entry: &str, opts: &TransferOpts) -> anyhow::Result<()> {
+fn push_item(
+    ctx: &Ctx,
+    src: &str,
+    dst: &str,
+    entry: &str,
+    opts: &TransferOpts,
+) -> anyhow::Result<()> {
     let text = read_src(ctx)?;
     let manifest = Manifest::from_toml(&text)?;
     let e = find(&manifest, entry)?;
@@ -633,14 +706,19 @@ fn push_item(ctx: &Ctx, src: &str, dst: &str, entry: &str, opts: &TransferOpts) 
     if dst_abs.exists() {
         match numstat(&ctx.repo_root, &src_rel, &dst_rel)? {
             None => {
-                println!("'{dst}' already has '{entry}' identical to '{src}' at {dst_rel} — nothing to do.");
+                println!(
+                    "'{dst}' already has '{entry}' identical to '{src}' at {dst_rel} — nothing to do."
+                );
                 return Ok(());
             }
             Some((add, del)) if !opts.force => {
                 println!(
                     "'{dst}' already has a variant of '{entry}' at {dst_rel} (+{add} -{del} vs '{src}'):\n"
                 );
-                print!("{}", diff_view::render(&raw_diff(&ctx.repo_root, &dst_rel, &src_rel)?));
+                print!(
+                    "{}",
+                    diff_view::render(&raw_diff(&ctx.repo_root, &dst_rel, &src_rel)?)
+                );
                 anyhow::bail!("refusing to overwrite without --force");
             }
             Some(_) => purge_path(&dst_abs)?,
@@ -660,13 +738,19 @@ fn push_item(ctx: &Ctx, src: &str, dst: &str, entry: &str, opts: &TransferOpts) 
     };
     std::fs::write(&ctx.manifest, doc.to_string())?;
 
-    let verb = if existing.is_some() { "overwrote" } else { "created" };
+    let verb = if existing.is_some() {
+        "overwrote"
+    } else {
+        "created"
+    };
     println!("{verb} '{dst}' variant of '{entry}': {dst_rel} (from '{src}' at {src_rel})");
     if tagged {
         println!("tagged '{entry}' into profile '{dst}' so it deploys there.");
     }
     if src == dst {
-        let note = format!("'{dst}' now has its own copy — the base path is free to change without following it.");
+        let note = format!(
+            "'{dst}' now has its own copy — the base path is free to change without following it."
+        );
         println!("{}", table::paint(&note, table::DIM));
     }
     println!("Run `dotfiles deploy` on '{dst}' to pick it up.");
@@ -675,7 +759,12 @@ fn push_item(ctx: &Ctx, src: &str, dst: &str, entry: &str, opts: &TransferOpts) 
 
 /// Refuse destinations that would quietly rewrite content another profile is
 /// still resolving to — the base path, or someone else's variant.
-fn guard_destination(manifest: &Manifest, e: &Entry, dst: &str, dst_rel: &str) -> anyhow::Result<()> {
+fn guard_destination(
+    manifest: &Manifest,
+    e: &Entry,
+    dst: &str,
+    dst_rel: &str,
+) -> anyhow::Result<()> {
     if dst_rel.trim().is_empty() || Path::new(dst_rel).is_absolute() {
         anyhow::bail!("variant path '{dst_rel}' must be a relative path inside the store");
     }
@@ -689,11 +778,25 @@ fn guard_destination(manifest: &Manifest, e: &Entry, dst: &str, dst_rel: &str) -
             e.name
         );
     }
-    if let Some((other, _)) = e.paths.iter().find(|(p, v)| p.as_str() != dst && v.as_str() == dst_rel) {
-        anyhow::bail!("'{dst_rel}' is already '{other}'s variant of '{}' — pick another path with --as", e.name);
+    if let Some((other, _)) = e
+        .paths
+        .iter()
+        .find(|(p, v)| p.as_str() != dst && v.as_str() == dst_rel)
+    {
+        anyhow::bail!(
+            "'{dst_rel}' is already '{other}'s variant of '{}' — pick another path with --as",
+            e.name
+        );
     }
-    if let Some(other) = manifest.entries.iter().find(|o| o.name != e.name && o.path == dst_rel) {
-        anyhow::bail!("'{dst_rel}' is the base path of entry '{}' — pick another path with --as", other.name);
+    if let Some(other) = manifest
+        .entries
+        .iter()
+        .find(|o| o.name != e.name && o.path == dst_rel)
+    {
+        anyhow::bail!(
+            "'{dst_rel}' is the base path of entry '{}' — pick another path with --as",
+            other.name
+        );
     }
     Ok(())
 }
@@ -702,7 +805,14 @@ fn guard_destination(manifest: &Manifest, e: &Entry, dst: &str, dst_rel: &str) -
 /// owns. Entries whose destination variant already differs are reported and
 /// skipped unless `--force`.
 fn push_profile(ctx: &Ctx, src: &str, dst: &str, opts: &TransferOpts) -> anyhow::Result<()> {
-    copy(ctx, src, dst, None, true, opts.pkg.as_deref().or(Some("all")))?;
+    copy(
+        ctx,
+        src,
+        dst,
+        None,
+        true,
+        opts.pkg.as_deref().or(Some("all")),
+    )?;
 
     let manifest = ctx.load_raw()?;
     let with_variants: Vec<String> = manifest
@@ -727,7 +837,14 @@ fn push_profile(ctx: &Ctx, src: &str, dst: &str, opts: &TransferOpts) -> anyhow:
 /// `profile copy <src> <dst> [--only E|--dotfiles|--pkg [source]]` — copy
 /// memberships and/or package lists from one profile to another. With no flags,
 /// copies everything. The destination must already be declared.
-fn copy(ctx: &Ctx, src: &str, dst: &str, only: Option<&str>, dotfiles: bool, pkg: Option<&str>) -> anyhow::Result<()> {
+fn copy(
+    ctx: &Ctx,
+    src: &str,
+    dst: &str,
+    only: Option<&str>,
+    dotfiles: bool,
+    pkg: Option<&str>,
+) -> anyhow::Result<()> {
     if src == dst {
         anyhow::bail!("source and destination profiles are the same ('{src}')");
     }
@@ -776,7 +893,9 @@ fn copy(ctx: &Ctx, src: &str, dst: &str, only: Option<&str>, dotfiles: bool, pkg
         }
     }
 
-    println!("copied {src} -> {dst}: {tagged} dotfile membership(s), {copied_pkgs} package list(s).");
+    println!(
+        "copied {src} -> {dst}: {tagged} dotfile membership(s), {copied_pkgs} package list(s)."
+    );
     Ok(())
 }
 
@@ -802,7 +921,10 @@ fn use_profile(ctx: &Ctx, name: &str) -> anyhow::Result<()> {
         Some(mut b) if b.store.is_some() => {
             b.store.as_mut().unwrap().profile = Some(name.to_string());
             b.save(&ctx.binding_path).map_err(|e| anyhow::anyhow!(e))?;
-            println!("active profile set to '{name}' (wrote {}).", ctx.binding_path.display());
+            println!(
+                "active profile set to '{name}' (wrote {}).",
+                ctx.binding_path.display()
+            );
         }
         _ => {
             std::fs::write(ctx.repo_root.join(".dotfiles-profile"), format!("{name}\n"))?;
@@ -831,7 +953,10 @@ mod tests {
         // A trailing slash is just the bare form.
         assert!(parse_ref("north/").unwrap().entry.is_none());
         // Surrounding whitespace is tolerated.
-        assert_eq!(parse_ref(" north / zsh ").unwrap().entry.as_deref(), Some("zsh"));
+        assert_eq!(
+            parse_ref(" north / zsh ").unwrap().entry.as_deref(),
+            Some("zsh")
+        );
     }
 
     #[test]
@@ -851,7 +976,10 @@ mod tests {
             why: None,
             spec: None,
             profiles: profiles.iter().map(|s| s.to_string()).collect(),
-            paths: variants.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            paths: variants
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
         }
     }
 
@@ -874,7 +1002,10 @@ mod tests {
     fn destination_guard_refuses_shared_paths() {
         let e = entry_with("nvim", "nvim", &[], &[("slab", "nvim-slab")]);
         let other = entry_with("zsh", "zsh/.zshrc", &[], &[]);
-        let manifest = Manifest { entries: vec![e.clone(), other], profiles: Default::default() };
+        let manifest = Manifest {
+            entries: vec![e.clone(), other],
+            profiles: Default::default(),
+        };
 
         // The happy path: a fresh, store-relative path nobody else uses.
         assert!(guard_destination(&manifest, &e, "cube", "nvim-cube").is_ok());

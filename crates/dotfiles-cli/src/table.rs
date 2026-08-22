@@ -33,7 +33,10 @@ pub struct Cell {
 
 impl Cell {
     pub fn new(text: impl Into<String>) -> Self {
-        Cell { text: text.into(), fg: None }
+        Cell {
+            text: text.into(),
+            fg: None,
+        }
     }
 
     /// Color this cell's text (applied only on a terminal).
@@ -99,7 +102,11 @@ impl Table {
         let n = self.columns.len();
 
         // Column widths = max(header, widest cell).
-        let mut widths: Vec<usize> = self.columns.iter().map(|(h, _)| h.chars().count()).collect();
+        let mut widths: Vec<usize> = self
+            .columns
+            .iter()
+            .map(|(h, _)| h.chars().count())
+            .collect();
         for row in &self.rows {
             for (i, c) in row.iter().enumerate().take(n) {
                 widths[i] = widths[i].max(c.width());
@@ -120,7 +127,13 @@ impl Table {
             .iter()
             .enumerate()
             .map(|(i, (h, align))| {
-                render(h, if color { Some(HEADER) } else { None }, widths[i], *align, color)
+                render(
+                    h,
+                    if color { Some(HEADER) } else { None },
+                    widths[i],
+                    *align,
+                    color,
+                )
             })
             .collect();
         println!("{}", join(&header_cells));

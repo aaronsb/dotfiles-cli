@@ -23,7 +23,11 @@ use std::path::{Path, PathBuf};
 use table::{Align, Table, cell};
 
 #[derive(Parser)]
-#[command(name = "dotfiles", version, about = "Self-documenting dotfiles management")]
+#[command(
+    name = "dotfiles",
+    version,
+    about = "Self-documenting dotfiles management"
+)]
 struct Cli {
     /// Path to the TOML manifest (default: `<store>/.dotfiles-manifest.toml`).
     #[arg(long, global = true)]
@@ -158,13 +162,17 @@ struct Ctx {
     binding: Option<HostBinding>,
 }
 
+/// `--home`, else `$HOME`.
+fn home_dir(cli: &Cli) -> anyhow::Result<PathBuf> {
+    cli.home
+        .clone()
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
+        .ok_or_else(|| anyhow::anyhow!("no --home and $HOME unset"))
+}
+
 impl Ctx {
     fn resolve(cli: &Cli) -> anyhow::Result<Self> {
-        let home = cli
-            .home
-            .clone()
-            .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
-            .ok_or_else(|| anyhow::anyhow!("no --home and $HOME unset"))?;
+        let home = home_dir(cli)?;
 
         // Locate the dotfiles store: explicit --repo-root, else $DOTFILES_DIR,
         // else the host binding's `store.path`, else ~/.dotfiles (ADR-013 §3).
@@ -199,7 +207,14 @@ impl Ctx {
             std::process::exit(2);
         }
         let profile = resolve_active_profile(cli, &repo_root, &manifest, binding.as_ref());
-        Ok(Ctx { manifest, repo_root, home, profile, binding_path, binding })
+        Ok(Ctx {
+            manifest,
+            repo_root,
+            home,
+            profile,
+            binding_path,
+            binding,
+        })
     }
 
     /// Read and parse the manifest into the typed catalog, **resolved for the
@@ -233,7 +248,11 @@ fn resolve_active_profile(
         .clone()
         .or_else(|| std::env::var("DOTFILES_PROFILE").ok())
         .filter(|s| !s.is_empty())
-        .or_else(|| binding.and_then(|b| b.store.as_ref()).and_then(|s| s.profile.clone()))
+        .or_else(|| {
+            binding
+                .and_then(|b| b.store.as_ref())
+                .and_then(|s| s.profile.clone())
+        })
         .filter(|s| !s.is_empty())
         .or_else(|| {
             std::fs::read_to_string(repo_root.join(".dotfiles-profile"))
@@ -288,9 +307,22 @@ fn main() -> anyhow::Result<()> {
             let ctx = Ctx::resolve(&cli)?;
             commands::set_enabled(&ctx, app, false)?;
         }
-        Command::Add { app, system_path, repo_path, mode, why } => {
+        Command::Add {
+            app,
+            system_path,
+            repo_path,
+            mode,
+            why,
+        } => {
             let ctx = Ctx::resolve(&cli)?;
-            commands::add(&ctx, app, system_path, repo_path.as_deref(), (*mode).into(), why.as_deref())?;
+            commands::add(
+                &ctx,
+                app,
+                system_path,
+                repo_path.as_deref(),
+                (*mode).into(),
+                why.as_deref(),
+            )?;
         }
         Command::Remove { app } => {
             let ctx = Ctx::resolve(&cli)?;
@@ -304,7 +336,11 @@ fn main() -> anyhow::Result<()> {
             let ctx = Ctx::resolve(&cli)?;
             commands::pull(&ctx, branch)?;
         }
-        Command::Diff { branch, details, git } => {
+        Command::Diff {
+            branch,
+            details,
+            git,
+        } => {
             let ctx = Ctx::resolve(&cli)?;
             commands::diff(&ctx, branch, *details, *git)?;
         }
@@ -339,7 +375,10 @@ fn status(ctx: &Ctx, format: Format) -> anyhow::Result<()> {
             let declared = manifest.profiles.contains_key(&ctx.profile);
             let provenance = if declared { "declared" } else { "implicit" };
             let mut t = Table::new()
-                .title(format!("Dotfiles Status — profile: {} ({provenance})", ctx.profile))
+                .title(format!(
+                    "Dotfiles Status — profile: {} ({provenance})",
+                    ctx.profile
+                ))
                 .column("APP", Align::Left)
                 .column("TARGET", Align::Left)
                 .column("STATUS", Align::Left);

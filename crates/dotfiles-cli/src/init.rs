@@ -7,8 +7,8 @@
 //! `--what-if`; only clean start is destructive, and it backs up first.
 
 use crate::Cli;
-use crate::commands::{git, git_stdout};
-use crate::store::{RegistryClone, fetch_split, print_registry, report_conflicts};
+use crate::commands::{git, git_clone, git_stdout};
+use crate::store::{Merge, RegistryClone, fetch_split, merge_entry, print_registry};
 use clap::{Args, ValueEnum};
 use dotfiles_core::binding::{
     HostBinding, StoreBinding, UNREGISTERED, contract_home, expand_home, valid_config_id,
@@ -78,11 +78,7 @@ struct Plan {
 }
 
 pub fn run(cli: &Cli, args: &InitArgs) -> anyhow::Result<()> {
-    let home = cli
-        .home
-        .clone()
-        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
-        .ok_or_else(|| anyhow::anyhow!("no --home and $HOME unset"))?;
+    let home = crate::home_dir(cli)?;
     let binding_path = HostBinding::default_path(&home);
     let binding = HostBinding::load(&binding_path).map_err(|e| anyhow::anyhow!(e))?;
     let store = args
@@ -203,20 +199,7 @@ fn choose_source(plan: &Plan) -> anyhow::Result<Source> {
 
 fn clone_store(url: &str, store: &Path) -> anyhow::Result<()> {
     println!("cloning {url} …");
-    if let Some(parent) = store.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let out = Command::new("git")
-        .args(["clone", "--quiet", url])
-        .arg(store)
-        .output()?;
-    if !out.status.success() {
-        anyhow::bail!(
-            "git clone failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    Ok(())
+    git_clone(url, store)
 }
 
 /// `git init` + fetch the entry's split history + reset onto it: the store
@@ -423,59 +406,13 @@ fn migrate_store(plan: &Plan, args: &InitArgs, current: Option<String>) -> anyho
 /// Merge the entry's split history over the store's base content.
 fn rebase_store(plan: &Plan, id: &str) -> anyhow::Result<()> {
     let reg = RegistryClone::open(&plan.home)?;
-    let split = reg.split(id)?;
-    fetch_split(&plan.store, &reg.path, &split)?;
-
-    let related = git(&plan.store, &["merge-base", "HEAD", "FETCH_HEAD"])?
-        .status
-        .success();
-    let ahead = git_stdout(&plan.store, &["rev-list", "--count", "HEAD..FETCH_HEAD"])?;
-    if related && ahead.trim() == "0" {
-        println!("the store already contains {id}");
-        return Ok(());
-    }
-    if plan.what_if {
-        // With no common ancestor every file both sides carry with different
-        // content conflicts; with one, this is the upper bound.
-        let both = git_stdout(
-            &plan.store,
-            &[
-                "diff",
-                "--name-only",
-                "--diff-filter=M",
-                "HEAD",
-                "FETCH_HEAD",
-            ],
-        )?;
-        let n = both.lines().count();
-        println!(
-            "would merge {id} ({}); {n} file(s) would conflict:",
-            &split[..7]
-        );
-        print!("{both}");
-        return Ok(());
-    }
-    let dirty = git_stdout(
-        &plan.store,
-        &["status", "--porcelain", "--untracked-files=no"],
-    )?;
-    if !dirty.trim().is_empty() {
-        anyhow::bail!("the store has uncommitted changes; commit or stash them, then re-run");
-    }
     let msg = format!("store: Rebase on {id}");
-    let mut argv = vec!["merge", "--no-edit", "-m", &msg];
-    if !related {
-        argv.push("--allow-unrelated-histories");
+    match merge_entry(&plan.store, &reg, id, plan.what_if, true, &msg) {
+        Ok(Merge::UpToDate) => println!("the store already contains {id}"),
+        Ok(Merge::Merged) => println!("rebased on {id}"),
+        Ok(Merge::Previewed | Merge::Unrelated) => {}
+        Err(e) => anyhow::bail!("{e} `dotfiles init --mode rebase --config {id}`"),
     }
-    argv.push("FETCH_HEAD");
-    let out = git(&plan.store, &argv)?;
-    if !out.status.success() {
-        report_conflicts(&plan.store)?;
-        anyhow::bail!(
-            "merge stopped on conflicts — resolve, commit, then re-run `dotfiles init --mode rebase --config {id}`"
-        );
-    }
-    println!("rebased on {id}");
     Ok(())
 }
 
@@ -519,14 +456,16 @@ fn offer_remote(plan: &Plan, args: &InitArgs) -> anyhow::Result<()> {
     if has_origin {
         return Ok(());
     }
-    let gh_ok = Command::new("gh")
-        .args(["auth", "status"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+    let gh_ok = || {
+        Command::new("gh")
+            .args(["auth", "status"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    };
     let choice = match args.remote {
         Some(r) => r,
-        None if !gh_ok || !std::io::stdin().is_terminal() => Remote::None,
+        None if !std::io::stdin().is_terminal() || !gh_ok() => Remote::None,
         None => {
             println!("\nThe store is a local git repo. Create a private GitHub remote for it?");
             if ask("create github.com/<you>/{} [y/N]", Some("n"))?
@@ -547,7 +486,7 @@ fn offer_remote(plan: &Plan, args: &InitArgs) -> anyhow::Result<()> {
             );
         }
         Remote::Github => {
-            if !gh_ok {
+            if !gh_ok() {
                 anyhow::bail!(
                     "--remote github needs `gh` installed and authenticated (`gh auth login`)"
                 );
@@ -600,7 +539,7 @@ fn backup_dir(home: &Path) -> anyhow::Result<PathBuf> {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs();
-    Ok(home.join(".dotfiles-backup").join(format!("store-{secs}")))
+    Ok(dotfiles_core::deploy::backup_dir(home).join(format!("store-{secs}")))
 }
 
 // ---------------------------------------------------------------- prompting

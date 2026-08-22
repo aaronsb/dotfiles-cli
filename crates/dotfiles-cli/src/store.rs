@@ -6,13 +6,16 @@
 //! to turn `configs/<id>/` into a root-relative history a store can merge.
 
 use crate::Ctx;
-use crate::commands::{git, git_stdout};
+use crate::commands::{git, git_clone, git_stdout};
 use clap::{Args, Subcommand};
 use dotfiles_core::binding::{
     HostBinding, Registry, RegistryEntry, UNREGISTERED, cli_satisfies, contract_home,
 };
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Whether this process has already refreshed the registry cache.
+static FETCHED: AtomicBool = AtomicBool::new(false);
 
 /// Where the public registry lives unless `$DOTFILES_REGISTRY` says otherwise.
 pub const DEFAULT_REGISTRY: &str = "https://github.com/dotarchy/dotfiles.git";
@@ -52,11 +55,7 @@ pub fn run(cli: &crate::Cli, args: &StoreArgs) -> anyhow::Result<()> {
     match args.action.as_ref().unwrap_or(&StoreAction::Show) {
         StoreAction::Show => show(&Ctx::resolve(cli)?),
         StoreAction::Registry => {
-            let home = cli
-                .home
-                .clone()
-                .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
-                .ok_or_else(|| anyhow::anyhow!("no --home and $HOME unset"))?;
+            let home = crate::home_dir(cli)?;
             let reg = RegistryClone::open(&home)?;
             print_registry(&reg.load()?);
             Ok(())
@@ -142,46 +141,110 @@ fn upstream_pull(ctx: &Ctx, what_if: bool) -> anyhow::Result<()> {
         );
     }
     let reg = RegistryClone::open(&ctx.home)?;
-    let split = reg.split(&s.config)?;
-    fetch_split(&ctx.repo_root, &reg.path, &split)?;
-
-    let related = git(&ctx.repo_root, &["merge-base", "HEAD", "FETCH_HEAD"])?
-        .status
-        .success();
-    if !related {
-        anyhow::bail!(
+    let msg = format!("store: Pull upstream {}", s.config);
+    match merge_entry(&ctx.repo_root, &reg, &s.config, what_if, false, &msg)? {
+        Merge::Unrelated => anyhow::bail!(
             "the store's history does not include {} — use `dotfiles init --mode rebase --config {}`",
             s.config,
             s.config
-        );
+        ),
+        Merge::UpToDate => println!("already up to date with {}", s.config),
+        Merge::Previewed | Merge::Merged => {}
     }
-    let incoming = git_stdout(&ctx.repo_root, &["rev-list", "--count", "HEAD..FETCH_HEAD"])?;
-    if incoming.trim() == "0" {
-        println!("already up to date with {}", s.config);
-        return Ok(());
+    Ok(())
+}
+
+/// What [`merge_entry`] did.
+pub enum Merge {
+    /// The store already contains the entry's history.
+    UpToDate,
+    /// No common ancestor and `allow_unrelated` was false; nothing done.
+    Unrelated,
+    /// `what_if`: printed the preview, changed nothing.
+    Previewed,
+    Merged,
+}
+
+/// Fetch the entry's split history and merge it into the store. Conflicts stop
+/// the merge in the working tree and are reported as an error. `init --mode
+/// rebase` and `store upstream pull` are this with different `allow_unrelated`.
+pub fn merge_entry(
+    store: &Path,
+    reg: &RegistryClone,
+    id: &str,
+    what_if: bool,
+    allow_unrelated: bool,
+    msg: &str,
+) -> anyhow::Result<Merge> {
+    let split = reg.split(id)?;
+    fetch_split(store, &reg.path, &split)?;
+
+    let related = git(store, &["merge-base", "HEAD", "FETCH_HEAD"])?
+        .status
+        .success();
+    let incoming = git_stdout(store, &["rev-list", "--count", "HEAD..FETCH_HEAD"])?;
+    if related && incoming.trim() == "0" {
+        return Ok(Merge::UpToDate);
     }
-    let stat = git_stdout(&ctx.repo_root, &["diff", "--stat", "HEAD...FETCH_HEAD"])?;
+    if !related && !allow_unrelated {
+        return Ok(Merge::Unrelated);
+    }
     if what_if {
-        println!(
-            "would merge {} commit(s) from {}:",
-            incoming.trim(),
-            s.config
-        );
-        print!("{stat}");
-        return Ok(());
+        if related {
+            println!("would merge {} commit(s) from {id}:", incoming.trim());
+            print!(
+                "{}",
+                git_stdout(store, &["diff", "--stat", "HEAD...FETCH_HEAD"])?
+            );
+        } else {
+            // With no common ancestor, every file both sides carry with
+            // different content conflicts.
+            let both = git_stdout(
+                store,
+                &[
+                    "diff",
+                    "--name-only",
+                    "--diff-filter=M",
+                    "HEAD",
+                    "FETCH_HEAD",
+                ],
+            )?;
+            println!(
+                "would merge {id} ({}); {} file(s) would conflict:",
+                &split[..7],
+                both.lines().count()
+            );
+            print!("{both}");
+        }
+        return Ok(Merge::Previewed);
     }
-    let msg = format!("store: Pull upstream {}", s.config);
-    let out = git(
-        &ctx.repo_root,
-        &["merge", "--no-edit", "-m", &msg, "FETCH_HEAD"],
-    )?;
+    let dirty = git_stdout(store, &["status", "--porcelain", "--untracked-files=no"])?;
+    if !dirty.trim().is_empty() {
+        anyhow::bail!("the store has uncommitted changes; commit or stash them, then re-run");
+    }
+    let mut argv = vec!["merge", "--no-edit", "-m", msg];
+    if !related {
+        argv.push("--allow-unrelated-histories");
+    }
+    argv.push("FETCH_HEAD");
+    let out = git(store, &argv)?;
     if !out.status.success() {
-        report_conflicts(&ctx.repo_root)?;
+        report_conflicts(store)?;
         anyhow::bail!("merge stopped on conflicts — resolve, commit, then re-run");
     }
-    println!("merged {} commit(s) from {}:", incoming.trim(), s.config);
-    print!("{stat}");
-    Ok(())
+    println!(
+        "merged {} from {id}:",
+        if related {
+            format!("{} commit(s)", incoming.trim())
+        } else {
+            "base content".into()
+        }
+    );
+    print!(
+        "{}",
+        git_stdout(store, &["diff", "--stat", "HEAD~1..HEAD"])?
+    );
+    Ok(Merge::Merged)
 }
 
 /// Print the files a stopped merge left conflicted.
@@ -244,18 +307,10 @@ impl RegistryClone {
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            let out = Command::new("git")
-                .args(["clone", "--quiet", &url])
-                .arg(&path)
-                .output()
-                .map_err(|e| anyhow::anyhow!("running git clone: {e}"))?;
-            if !out.status.success() {
-                anyhow::bail!(
-                    "cloning registry {url}: {}",
-                    String::from_utf8_lossy(&out.stderr).trim()
-                );
-            }
-        } else {
+            git_clone(&url, &path).map_err(|e| anyhow::anyhow!("cloning registry: {e}"))?;
+        } else if !FETCHED.swap(true, Ordering::SeqCst) {
+            // Once per process: interactive paths open the registry to list it
+            // and again to use it.
             let out = git(&path, &["fetch", "--quiet", "origin"])?;
             if !out.status.success() {
                 eprintln!(

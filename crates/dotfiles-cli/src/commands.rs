@@ -33,7 +33,11 @@ pub fn deploy(ctx: &Ctx, dry_run: bool, force: bool) -> anyhow::Result<()> {
             DeployOutcome::Disabled => {} // disabled entries are silently skipped
             DeployOutcome::Deployed { backed_up } => {
                 if let Some(p) = backed_up {
-                    println!("{:<22} {verb} backed up existing -> {}", e.name, p.display());
+                    println!(
+                        "{:<22} {verb} backed up existing -> {}",
+                        e.name,
+                        p.display()
+                    );
                 }
                 println!("{:<22} {verb} deploy -> ~/{}", e.name, e.target);
             }
@@ -115,13 +119,24 @@ pub fn add(
     let src = std::fs::read_to_string(&ctx.manifest)
         .map_err(|e| anyhow::anyhow!("reading {}: {e}", ctx.manifest.display()))?;
     let mut doc = edit::parse(&src)?;
-    edit::add_entry(&mut doc, NewEntry { name: app, path, target: &target, mode, why })
-        .map_err(|e| anyhow::anyhow!(e))?;
+    edit::add_entry(
+        &mut doc,
+        NewEntry {
+            name: app,
+            path,
+            target: &target,
+            mode,
+            why,
+        },
+    )
+    .map_err(|e| anyhow::anyhow!(e))?;
     std::fs::write(&ctx.manifest, doc.to_string())?;
 
     println!("added {app} ({path} -> ~/{target}, mode: {mode})");
     if why.is_none() {
-        println!("note: no `why` recorded — add one to the entry to keep the manifest self-documenting.");
+        println!(
+            "note: no `why` recorded — add one to the entry to keep the manifest self-documenting."
+        );
     }
     Ok(())
 }
@@ -180,9 +195,12 @@ pub fn push(ctx: &Ctx, message: Option<&str>, branch: &str) -> anyhow::Result<()
     }
 
     // Push; set upstream if origin/<branch> does not exist yet.
-    let upstream_exists = git(repo, &["rev-parse", "--verify", &format!("origin/{branch}")])?
-        .status
-        .success();
+    let upstream_exists = git(
+        repo,
+        &["rev-parse", "--verify", &format!("origin/{branch}")],
+    )?
+    .status
+    .success();
     let push_args: Vec<&str> = if upstream_exists {
         vec!["push", "origin", branch]
     } else {
@@ -193,7 +211,10 @@ pub fn push(ctx: &Ctx, message: Option<&str>, branch: &str) -> anyhow::Result<()
         println!("pushed {branch} to origin");
         Ok(())
     } else {
-        anyhow::bail!("git push failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+        anyhow::bail!(
+            "git push failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
     }
 }
 
@@ -203,7 +224,10 @@ pub fn pull(ctx: &Ctx, branch: &str) -> anyhow::Result<()> {
     ensure_git_remote(repo)?;
     ensure_on_branch(repo, branch)?;
 
-    if !git(repo, &["fetch", "origin", branch, "--quiet"])?.status.success() {
+    if !git(repo, &["fetch", "origin", branch, "--quiet"])?
+        .status
+        .success()
+    {
         anyhow::bail!("fetch failed (does origin/{branch} exist?)");
     }
     let remote_ref = format!("origin/{branch}");
@@ -217,7 +241,10 @@ pub fn pull(ctx: &Ctx, branch: &str) -> anyhow::Result<()> {
     }
 
     let old_head = git_stdout(repo, &["rev-parse", "HEAD"])?.trim().to_string();
-    if !git(repo, &["merge", "--ff-only", &remote_ref, "--quiet"])?.status.success() {
+    if !git(repo, &["merge", "--ff-only", &remote_ref, "--quiet"])?
+        .status
+        .success()
+    {
         // Reconcile before bailing: this operator is about to do manual git
         // work over an unknown period, and a stale binary would silently
         // shape all of it.
@@ -225,8 +252,14 @@ pub fn pull(ctx: &Ctx, branch: &str) -> anyhow::Result<()> {
         anyhow::bail!("pull failed (likely diverged) — resolve manually");
     }
     println!("pulled {behind} commit(s) from {remote_ref}:");
-    print!("{}", git_stdout(repo, &["log", "--oneline", &format!("{old_head}..HEAD")])?);
-    print!("{}", git_stdout(repo, &["diff", "--stat", &format!("{old_head}..HEAD")])?);
+    print!(
+        "{}",
+        git_stdout(repo, &["log", "--oneline", &format!("{old_head}..HEAD")])?
+    );
+    print!(
+        "{}",
+        git_stdout(repo, &["diff", "--stat", &format!("{old_head}..HEAD")])?
+    );
     // The pull may have moved the pin; reconcile against what the store now
     // asks for, not what it asked for a moment ago.
     crate::selfupdate::reconcile(repo);
@@ -241,7 +274,10 @@ pub fn pull(ctx: &Ctx, branch: &str) -> anyhow::Result<()> {
 pub fn diff(ctx: &Ctx, branch: &str, details: bool, raw: bool) -> anyhow::Result<()> {
     let repo = &ctx.repo_root;
     ensure_git_remote(repo)?;
-    if !git(repo, &["fetch", "origin", branch, "--quiet"])?.status.success() {
+    if !git(repo, &["fetch", "origin", branch, "--quiet"])?
+        .status
+        .success()
+    {
         anyhow::bail!("fetch failed (does origin/{branch} exist?)");
     }
     let remote_ref = format!("origin/{branch}");
@@ -260,7 +296,10 @@ pub fn diff(ctx: &Ctx, branch: &str, details: bool, raw: bool) -> anyhow::Result
         println!();
     }
 
-    if !git(repo, &["rev-parse", "--verify", &remote_ref])?.status.success() {
+    if !git(repo, &["rev-parse", "--verify", &remote_ref])?
+        .status
+        .success()
+    {
         println!("{remote_ref} does not exist on origin yet.");
         return Ok(());
     }
@@ -273,7 +312,10 @@ pub fn diff(ctx: &Ctx, branch: &str, details: bool, raw: bool) -> anyhow::Result
     }
     if ahead > 0 {
         println!("Local is {ahead} commit(s) ahead of {remote_ref} (would push):");
-        print!("{}", git_stdout(repo, &["log", "--oneline", &format!("{remote_ref}..HEAD")])?);
+        print!(
+            "{}",
+            git_stdout(repo, &["log", "--oneline", &format!("{remote_ref}..HEAD")])?
+        );
         let range = format!("{remote_ref}..HEAD");
         if detailed {
             print!("{}", show_diff(repo, &[vec![range.as_str()]], raw)?);
@@ -284,7 +326,10 @@ pub fn diff(ctx: &Ctx, branch: &str, details: bool, raw: bool) -> anyhow::Result
     }
     if behind > 0 {
         println!("Remote is {behind} commit(s) ahead (would pull):");
-        print!("{}", git_stdout(repo, &["log", "--oneline", &format!("HEAD..{remote_ref}")])?);
+        print!(
+            "{}",
+            git_stdout(repo, &["log", "--oneline", &format!("HEAD..{remote_ref}")])?
+        );
         let range = format!("HEAD..{remote_ref}");
         if detailed {
             print!("{}", show_diff(repo, &[vec![range.as_str()]], raw)?);
@@ -316,7 +361,10 @@ fn ensure_git_remote(repo: &Path) -> anyhow::Result<()> {
     if !git(repo, &["rev-parse", "--git-dir"])?.status.success() {
         anyhow::bail!("{} is not a git repository", repo.display());
     }
-    if !git(repo, &["remote", "get-url", "origin"])?.status.success() {
+    if !git(repo, &["remote", "get-url", "origin"])?
+        .status
+        .success()
+    {
         anyhow::bail!("no 'origin' remote configured in {}", repo.display());
     }
     Ok(())
@@ -345,6 +393,25 @@ pub(crate) fn git(repo: &Path, args: &[&str]) -> anyhow::Result<std::process::Ou
         .args(args)
         .output()
         .map_err(|e| anyhow::anyhow!("running git {args:?}: {e}"))
+}
+
+/// `git clone --quiet <url> <dest>`; `dest`'s parent is created.
+pub(crate) fn git_clone(url: &str, dest: &Path) -> anyhow::Result<()> {
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let out = Command::new("git")
+        .args(["clone", "--quiet", url])
+        .arg(dest)
+        .output()
+        .map_err(|e| anyhow::anyhow!("running git clone: {e}"))?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "git clone {url} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
 }
 
 pub(crate) fn git_stdout(repo: &Path, args: &[&str]) -> anyhow::Result<String> {

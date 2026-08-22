@@ -88,9 +88,20 @@ pub fn run(ctx: &Ctx, app: &str) -> anyhow::Result<()> {
 
     // Content source under the active profile, and any other profile's variant
     // (ADR-011) — which bytes this machine deploys, and who else differs.
-    let raw_entry = raw.entries.iter().find(|r| r.name == app).expect("same catalog");
-    let origin = if raw_entry.has_variant(&ctx.profile) { "variant" } else { "base" };
-    field("source", &format!("{} ({origin} for {})", e.path, ctx.profile));
+    let raw_entry = raw
+        .entries
+        .iter()
+        .find(|r| r.name == app)
+        .expect("same catalog");
+    let origin = if raw_entry.has_variant(&ctx.profile) {
+        "variant"
+    } else {
+        "base"
+    };
+    field(
+        "source",
+        &format!("{} ({origin} for {})", e.path, ctx.profile),
+    );
     let others: Vec<String> = raw_entry
         .paths
         .iter()
@@ -192,6 +203,9 @@ mod tests {
     #[test]
     fn a_word_longer_than_width_is_not_split() {
         // Better to overflow than to mangle a path/identifier mid-token.
-        assert_eq!(wrap("supercalifragilistic", 8), vec!["supercalifragilistic"]);
+        assert_eq!(
+            wrap("supercalifragilistic", 8),
+            vec!["supercalifragilistic"]
+        );
     }
 }
