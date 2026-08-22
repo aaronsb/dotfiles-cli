@@ -10,9 +10,18 @@ related:
   - ADR-008
   - ADR-011
   - ADR-200
+  - ADR-013
 ---
 
 # ADR-201: Public starter repo, private downstream store
+
+> **Amended by [ADR-013](../foundation/ADR-013-three-repos-tool-registry-store-and-a-host-binding-outside-the-store.md).**
+> The thesis holds — a public ancestor, a private descendant per operator. Three
+> parts are replaced: §1's repo list becomes tool / registry / store (ADR-013
+> §1); the starter becomes the registry entry `sh.dotarchy.starter`; and §4
+> ("the CLI does not change") is withdrawn — `init`, the host binding, and the
+> subtree verbs are CLI work. The upstream relationship becomes a subtree of a
+> registry entry rather than a whole-repo remote (ADR-013 §6).
 
 ## Context
 

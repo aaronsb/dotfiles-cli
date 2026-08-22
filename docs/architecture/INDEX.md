@@ -31,6 +31,8 @@ _Founding and cross-cutting decisions — tool existence, the shared manifest co
 | [ADR-009](./foundation/ADR-009-decline-spec-conformance-the-spec-stays-documentary.md) | Decline spec conformance; the spec stays documentary | Accepted |
 | [ADR-010](./foundation/ADR-010-standalone-claude-settings-projector-for-claude-settings-json.md) | Standalone Claude settings projector for ~/.claude/settings.json | Accepted |
 | [ADR-011](./foundation/ADR-011-per-profile-content-variants-and-a-ref-addressed-profile-crud.md) | Per-profile content variants and a ref-addressed profile CRUD | Draft |
+| [ADR-012](./foundation/ADR-012-packages-live-outside-the-store-in-their-own-git-repo.md) | Packages live outside the store, in their own git repo | Superseded |
+| [ADR-013](./foundation/ADR-013-three-repos-tool-registry-store-and-a-host-binding-outside-the-store.md) | Three repos — tool, registry, store — and a host binding outside the store | Draft |
 
 ## Interface
 _Surfaces over the shared core — the non-interactive JSON CLI (agent surface) and the Ratatui TUI (human surface), live-watch presentation_
