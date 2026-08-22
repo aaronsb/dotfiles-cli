@@ -227,10 +227,11 @@ pub fn merge_entry(
         argv.push("--allow-unrelated-histories");
     }
     argv.push("FETCH_HEAD");
-    let out = git(store, &argv)?;
-    // Whether or not the merge stopped, put back what upstream can never own.
+    git(store, &argv)?;
+    // Whether or not the merge stopped, put back what upstream can never own;
+    // that can resolve a modify/delete conflict on its own.
     restore_store_only(store)?;
-    if !out.status.success() {
+    if !unmerged_paths(store)?.is_empty() {
         report_conflicts(store)?;
         anyhow::bail!("merge stopped on conflicts — resolve, commit, then re-run");
     }
@@ -274,15 +275,19 @@ fn restore_store_only(store: &Path) -> anyhow::Result<()> {
         store,
         &["diff", "--cached", "--name-only", "--diff-filter=D"],
     )?;
-    for path in deleted.lines() {
-        let top = path.split('/').next().unwrap_or(path);
+    // Clean deletions are staged; a file the store changed and upstream
+    // dropped is an unmerged modify/delete. Both resolve to "keep ours".
+    let unmerged = unmerged_paths(store)?;
+    for path in deleted.lines().map(str::to_string).chain(unmerged) {
+        let top = path.split('/').next().unwrap_or(&path);
         if STORE_ONLY.contains(&top) {
-            git(store, &["checkout", "--quiet", "ORIG_HEAD", "--", path])?;
+            git(store, &["checkout", "--quiet", "ORIG_HEAD", "--", &path])?;
+            git(store, &["add", "--", &path])?;
         }
     }
     let manifest = store.join(".dotfiles-manifest.toml");
-    let conflicted = git_stdout(store, &["diff", "--name-only", "--diff-filter=U"])?;
-    if conflicted.lines().any(|l| l == ".dotfiles-manifest.toml") || !manifest.exists() {
+    let conflicted = unmerged_paths(store)?;
+    if conflicted.iter().any(|l| l == ".dotfiles-manifest.toml") || !manifest.exists() {
         return Ok(());
     }
     let before = git_stdout(store, &["show", "ORIG_HEAD:.dotfiles-manifest.toml"])?;
@@ -301,11 +306,22 @@ fn restore_store_only(store: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Paths with unmerged index entries, each once.
+pub fn unmerged_paths(store: &Path) -> anyhow::Result<Vec<String>> {
+    let out = git_stdout(store, &["ls-files", "-u"])?;
+    let mut paths: Vec<String> = out
+        .lines()
+        .filter_map(|l| l.split('\t').nth(1))
+        .map(str::to_string)
+        .collect();
+    paths.dedup();
+    Ok(paths)
+}
+
 /// Print the files a stopped merge left conflicted.
 pub fn report_conflicts(store: &Path) -> anyhow::Result<()> {
-    let files = git_stdout(store, &["diff", "--name-only", "--diff-filter=U"])?;
     eprintln!("conflicts in:");
-    for f in files.lines() {
+    for f in unmerged_paths(store)? {
         eprintln!("  {f}");
     }
     Ok(())
