@@ -8,19 +8,26 @@ mod banner;
 mod claude;
 mod commands;
 mod diff_view;
+mod init;
 mod pkg;
 mod profile;
 mod selfupdate;
 mod show;
+mod store;
 mod table;
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use dotfiles_core::binding::HostBinding;
 use dotfiles_core::{DeployStatus, Manifest, Mode, State};
 use std::path::{Path, PathBuf};
 use table::{Align, Table, cell};
 
 #[derive(Parser)]
-#[command(name = "dotfiles", version, about = "Self-documenting dotfiles management")]
+#[command(
+    name = "dotfiles",
+    version,
+    about = "Self-documenting dotfiles management"
+)]
 struct Cli {
     /// Path to the TOML manifest (default: `<store>/.dotfiles-manifest.toml`).
     #[arg(long, global = true)]
@@ -31,8 +38,9 @@ struct Cli {
     /// Home dir that target paths resolve against (default: $HOME).
     #[arg(long, global = true)]
     home: Option<PathBuf>,
-    /// Active profile (default: $DOTFILES_PROFILE, the `.dotfiles-profile` file,
-    /// a `[profiles]` match against the hostname, then the hostname).
+    /// Active profile (default: $DOTFILES_PROFILE, the host binding's
+    /// `store.profile`, a `[profiles]` match against the hostname, then the
+    /// hostname).
     #[arg(long, global = true)]
     profile: Option<String>,
     #[command(subcommand)]
@@ -114,6 +122,10 @@ enum Command {
     Profile(profile::ProfileArgs),
     /// Read and write Claude Code user-scope settings (~/.claude/settings.json).
     Claude(claude::ClaudeArgs),
+    /// Set this host up: create or adopt a store, bind it, pick a profile (ADR-013).
+    Init(init::InitArgs),
+    /// The store this host is bound to: show it, pull its registry upstream.
+    Store(store::StoreArgs),
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -144,23 +156,31 @@ struct Ctx {
     home: PathBuf,
     /// The active profile (resolved once at startup).
     profile: String,
+    /// Where the host binding lives (ADR-013 §3), whether or not it exists yet.
+    binding_path: PathBuf,
+    /// The host binding, if this machine has been through `init`.
+    binding: Option<HostBinding>,
+    /// Whether `repo_root` is the binding's store. `--repo-root` or
+    /// `$DOTFILES_DIR` can point at another store, whose profile state is its
+    /// own (ADR-013 §3).
+    bound: bool,
+}
+
+/// `--home`, else `$HOME`.
+fn home_dir(cli: &Cli) -> anyhow::Result<PathBuf> {
+    cli.home
+        .clone()
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
+        .ok_or_else(|| anyhow::anyhow!("no --home and $HOME unset"))
 }
 
 impl Ctx {
     fn resolve(cli: &Cli) -> anyhow::Result<Self> {
-        let home = cli
-            .home
-            .clone()
-            .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
-            .ok_or_else(|| anyhow::anyhow!("no --home and $HOME unset"))?;
+        let home = home_dir(cli)?;
 
-        // Locate the dotfiles store: explicit --repo-root, else $DOTFILES_DIR,
-        // else ~/.dotfiles. This lets `dotfiles` run from any directory.
-        let store = cli
-            .repo_root
-            .clone()
-            .or_else(|| std::env::var_os("DOTFILES_DIR").map(PathBuf::from))
-            .unwrap_or_else(|| home.join(".dotfiles"));
+        let binding_path = HostBinding::default_path(&home);
+        let binding = load_binding(&binding_path);
+        let (store, bound) = resolve_store(cli, &home, binding.as_ref());
         let manifest = cli
             .manifest
             .clone()
@@ -174,10 +194,24 @@ impl Ctx {
         // First-run gate (ADR-001 #7): operate only inside a git repo.
         if let Err(msg) = dotfiles_core::first_run_gate(&repo_root) {
             eprintln!("dotfiles: {msg}");
+            eprintln!("dotfiles: run `dotfiles init` to set this host up (ADR-013).");
             std::process::exit(2);
         }
-        let profile = resolve_active_profile(cli, &repo_root, &manifest);
-        Ok(Ctx { manifest, repo_root, home, profile })
+        let profile = resolve_active_profile(
+            cli,
+            &repo_root,
+            &manifest,
+            binding.as_ref().filter(|_| bound),
+        );
+        Ok(Ctx {
+            manifest,
+            repo_root,
+            home,
+            profile,
+            binding_path,
+            binding,
+            bound,
+        })
     }
 
     /// Read and parse the manifest into the typed catalog, **resolved for the
@@ -196,14 +230,82 @@ impl Ctx {
     }
 }
 
+/// Read the host binding. A malformed file is reported and treated as absent:
+/// `--repo-root`/`$DOTFILES_DIR` still work, and `init` can rewrite it.
+fn load_binding(path: &Path) -> Option<HostBinding> {
+    match HostBinding::load(path) {
+        Ok(b) => b,
+        Err(msg) => {
+            eprintln!("dotfiles: warning: {msg}; `dotfiles init` rewrites it");
+            None
+        }
+    }
+}
+
+/// Locate the store (ADR-013 §3): `--repo-root` → `$DOTFILES_DIR` → the
+/// binding's `store.path` → `~/.dotfiles`. Relative paths are anchored at the
+/// current directory. Returns whether the result is the binding's store.
+fn resolve_store(cli: &Cli, home: &Path, binding: Option<&HostBinding>) -> (PathBuf, bool) {
+    let bound_path = binding.and_then(|b| b.store_path(home));
+    let explicit = cli
+        .repo_root
+        .clone()
+        .or_else(|| std::env::var_os("DOTFILES_DIR").map(PathBuf::from))
+        .map(|p| absolute(&p));
+    match explicit {
+        Some(p) => {
+            let same = bound_path.as_deref().is_some_and(|b| same_dir(b, &p));
+            (p, same)
+        }
+        None => match bound_path {
+            Some(b) => (b, true),
+            None => (home.join(".dotfiles"), false),
+        },
+    }
+}
+
+/// Absolute form of a path: canonical when it exists, cwd-anchored otherwise.
+fn absolute(p: &Path) -> PathBuf {
+    if let Ok(c) = p.canonicalize() {
+        return c;
+    }
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|d| d.join(p))
+            .unwrap_or_else(|_| p.to_path_buf())
+    }
+}
+
+/// Two paths name the same directory (either may not exist yet).
+fn same_dir(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a == b,
+    }
+}
+
 /// Resolve the active profile. An explicit choice — `--profile`,
-/// `$DOTFILES_PROFILE`, or the `.dotfiles-profile` file — wins; otherwise a
-/// `[profiles]` `match` glob against the hostname, then the hostname itself.
-fn resolve_active_profile(cli: &Cli, repo_root: &Path, manifest_path: &Path) -> String {
+/// `$DOTFILES_PROFILE`, the host binding's `store.profile`, or the legacy
+/// `.dotfiles-profile` file — wins; otherwise a `[profiles]` `match` glob
+/// against the hostname, then the hostname itself.
+fn resolve_active_profile(
+    cli: &Cli,
+    repo_root: &Path,
+    manifest_path: &Path,
+    binding: Option<&HostBinding>,
+) -> String {
     let explicit = cli
         .profile
         .clone()
         .or_else(|| std::env::var("DOTFILES_PROFILE").ok())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            binding
+                .and_then(|b| b.store.as_ref())
+                .and_then(|s| s.profile.clone())
+        })
         .filter(|s| !s.is_empty())
         .or_else(|| {
             std::fs::read_to_string(repo_root.join(".dotfiles-profile"))
@@ -258,9 +360,22 @@ fn main() -> anyhow::Result<()> {
             let ctx = Ctx::resolve(&cli)?;
             commands::set_enabled(&ctx, app, false)?;
         }
-        Command::Add { app, system_path, repo_path, mode, why } => {
+        Command::Add {
+            app,
+            system_path,
+            repo_path,
+            mode,
+            why,
+        } => {
             let ctx = Ctx::resolve(&cli)?;
-            commands::add(&ctx, app, system_path, repo_path.as_deref(), (*mode).into(), why.as_deref())?;
+            commands::add(
+                &ctx,
+                app,
+                system_path,
+                repo_path.as_deref(),
+                (*mode).into(),
+                why.as_deref(),
+            )?;
         }
         Command::Remove { app } => {
             let ctx = Ctx::resolve(&cli)?;
@@ -274,7 +389,11 @@ fn main() -> anyhow::Result<()> {
             let ctx = Ctx::resolve(&cli)?;
             commands::pull(&ctx, branch)?;
         }
-        Command::Diff { branch, details, git } => {
+        Command::Diff {
+            branch,
+            details,
+            git,
+        } => {
             let ctx = Ctx::resolve(&cli)?;
             commands::diff(&ctx, branch, *details, *git)?;
         }
@@ -290,6 +409,9 @@ fn main() -> anyhow::Result<()> {
             let ctx = Ctx::resolve(&cli)?;
             claude::run(&ctx, args)?;
         }
+        // `init` runs before a store exists, so it resolves nothing up front.
+        Command::Init(args) => init::run(&cli, args)?,
+        Command::Store(args) => store::run(&cli, args)?,
     }
     Ok(())
 }
@@ -306,7 +428,10 @@ fn status(ctx: &Ctx, format: Format) -> anyhow::Result<()> {
             let declared = manifest.profiles.contains_key(&ctx.profile);
             let provenance = if declared { "declared" } else { "implicit" };
             let mut t = Table::new()
-                .title(format!("Dotfiles Status — profile: {} ({provenance})", ctx.profile))
+                .title(format!(
+                    "Dotfiles Status — profile: {} ({provenance})",
+                    ctx.profile
+                ))
                 .column("APP", Align::Left)
                 .column("TARGET", Align::Left)
                 .column("STATUS", Align::Left);

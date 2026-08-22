@@ -86,6 +86,34 @@ Overwriting an existing variant needs `--force`, and refusing shows the diff tha
 justified it. Nothing ever writes onto the base path behind another profile's
 back.
 
+## Hosts, stores, and the registry
+
+Three repos with three owners (ADR-013): this **tool**; a public **registry**
+of named configurations (`configs/com.example.dotfiles/`, contributed by pull
+request); and your private **store** — one configuration tree, your profiles
+and variants, and `packages/<profile>/`. A store descends from a registry
+entry and carries no engine files.
+
+Each machine records which store it uses, what that store descends from, and
+its active profile in a **host binding** outside the store,
+`~/.config/dotfiles/config.toml`. `dotfiles init` writes it:
+
+```bash
+dotfiles init                                   # interactive: pick an entry, create the store
+dotfiles init --config com.example.dotfiles \
+              --remote github --profile north   # the same, non-interactively
+dotfiles init --existing git@github.com:you/store.git   # adopt a store you already push to
+dotfiles init --mode migrate                    # a pre-binding store: fold markers, strip engine files
+dotfiles init --mode rebase --config com.other.dotfiles  # keep the store, change its ancestry
+dotfiles init --mode clean --config sh.dotarchy.starter  # back it up, start over
+dotfiles store                                  # the binding and the store's git state
+dotfiles store registry                         # what the registry publishes
+dotfiles store upstream pull                    # merge the entry's latest into the store
+```
+
+Every `init` path is idempotent and takes `--what-if`. The registry URL comes
+from `$DOTFILES_REGISTRY`; the clone is cached under `~/.cache/dotfiles/`.
+
 ## Shape (per ADR-001, amended by ADR-007)
 
 - **One core, one CLI surface.** `dotfiles-core` owns manifest parsing, deploy-status

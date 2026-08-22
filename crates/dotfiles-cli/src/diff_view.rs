@@ -54,8 +54,14 @@ fn render_file(lines: &[&str], color: bool, out: &mut String) {
         return; // pure mode/rename change with no hunks — nothing to show
     }
     let path = file_path(lines);
-    let added = rows.iter().filter(|r| matches!(r.kind, Kind::Added)).count();
-    let removed = rows.iter().filter(|r| matches!(r.kind, Kind::Removed)).count();
+    let added = rows
+        .iter()
+        .filter(|r| matches!(r.kind, Kind::Added))
+        .count();
+    let removed = rows
+        .iter()
+        .filter(|r| matches!(r.kind, Kind::Removed))
+        .count();
 
     // Gutter width from the widest line number; band width so every colored row
     // ends at the same column (a solid block, like the editor view).
@@ -67,14 +73,25 @@ fn render_file(lines: &[&str], color: bool, out: &mut String) {
         .unwrap_or(0);
 
     if color {
-        let _ = writeln!(out, "{BOLD}{CYAN}▸ {path}{RESET}  {GREEN}+{added}{RESET} {RED}-{removed}{RESET}");
+        let _ = writeln!(
+            out,
+            "{BOLD}{CYAN}▸ {path}{RESET}  {GREEN}+{added}{RESET} {RED}-{removed}{RESET}"
+        );
     } else {
         let _ = writeln!(out, "▸ {path}  +{added} -{removed}");
     }
 
     for row in &rows {
         if row.hunk_break && !std::ptr::eq(row, &rows[0]) {
-            let _ = writeln!(out, "{}", if color { format!("{DIM}  ⋯{RESET}") } else { "  ⋯".into() });
+            let _ = writeln!(
+                out,
+                "{}",
+                if color {
+                    format!("{DIM}  ⋯{RESET}")
+                } else {
+                    "  ⋯".into()
+                }
+            );
         }
         let marker = match row.kind {
             Kind::Context => ' ',
@@ -91,7 +108,11 @@ fn render_file(lines: &[&str], color: bool, out: &mut String) {
                 let _ = writeln!(out, "{DIM}{:>numw$}{RESET}   {}", row.num, row.text);
             }
             (true, kind) => {
-                let bg = if matches!(kind, Kind::Added) { ADD_BG } else { DEL_BG };
+                let bg = if matches!(kind, Kind::Added) {
+                    ADD_BG
+                } else {
+                    DEL_BG
+                };
                 let pad = " ".repeat(bandw.saturating_sub(body.chars().count()));
                 let _ = writeln!(out, "{bg}{body}{pad}{RESET}");
             }
@@ -118,15 +139,30 @@ fn parse_rows(lines: &[&str]) -> Vec<Row> {
             continue;
         }
         if let Some(rest) = l.strip_prefix('+') {
-            rows.push(Row { num: new_no, kind: Kind::Added, text: rest.to_string(), hunk_break: pending_break });
+            rows.push(Row {
+                num: new_no,
+                kind: Kind::Added,
+                text: rest.to_string(),
+                hunk_break: pending_break,
+            });
             new_no += 1;
         } else if let Some(rest) = l.strip_prefix('-') {
-            rows.push(Row { num: old_no, kind: Kind::Removed, text: rest.to_string(), hunk_break: pending_break });
+            rows.push(Row {
+                num: old_no,
+                kind: Kind::Removed,
+                text: rest.to_string(),
+                hunk_break: pending_break,
+            });
             old_no += 1;
         } else {
             // Context line (leading space) or a blank line within a hunk.
             let text = l.strip_prefix(' ').unwrap_or(l).to_string();
-            rows.push(Row { num: new_no, kind: Kind::Context, text, hunk_break: pending_break });
+            rows.push(Row {
+                num: new_no,
+                kind: Kind::Context,
+                text,
+                hunk_break: pending_break,
+            });
             old_no += 1;
             new_no += 1;
         }
@@ -176,7 +212,11 @@ fn parse_hunk(l: &str) -> Option<(usize, usize)> {
 
 /// Decimal digit count (min 1).
 fn digits(n: usize) -> usize {
-    if n == 0 { 1 } else { (n as f64).log10() as usize + 1 }
+    if n == 0 {
+        1
+    } else {
+        (n as f64).log10() as usize + 1
+    }
 }
 
 #[cfg(test)]

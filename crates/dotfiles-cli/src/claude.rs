@@ -116,13 +116,21 @@ fn read_fragments(dir: &Path) -> anyhow::Result<Vec<(PathBuf, Value)>> {
 /// against the *live* document, so no brittle key allowlist is needed here.
 fn validate_fragment(frag: &Value, path: &Path) -> anyhow::Result<()> {
     if !frag.is_object() {
-        anyhow::bail!("{}: fragment must be a JSON object (got {})", path.display(), kind(frag));
+        anyhow::bail!(
+            "{}: fragment must be a JSON object (got {})",
+            path.display(),
+            kind(frag)
+        );
     }
     for ul in UNION_LISTS {
         if let Some(v) = sp::get(frag, ul)
             && !v.is_array()
         {
-            anyhow::bail!("{}: {ul} must be a JSON array (got {})", path.display(), kind(&v));
+            anyhow::bail!(
+                "{}: {ul} must be a JSON array (got {})",
+                path.display(),
+                kind(&v)
+            );
         }
     }
     Ok(())
@@ -166,7 +174,11 @@ fn load_store(ctx: &Ctx) -> anyhow::Result<Value> {
 /// other leaf is last-wins.
 fn deep_merge(acc: &mut Map<String, Value>, overlay: &Map<String, Value>, prefix: &str) {
     for (key, val) in overlay {
-        let path = if prefix.is_empty() { key.clone() } else { format!("{prefix}.{key}") };
+        let path = if prefix.is_empty() {
+            key.clone()
+        } else {
+            format!("{prefix}.{key}")
+        };
         if is_union_list(&path) {
             // Validated as an array upstream; union it in.
             let entry = acc.entry(key.clone()).or_insert_with(|| json!([]));
@@ -182,7 +194,11 @@ fn deep_merge(acc: &mut Map<String, Value>, overlay: &Map<String, Value>, prefix
             if !child.is_object() {
                 *child = json!({});
             }
-            deep_merge(child.as_object_mut().expect("just ensured object"), vo, &path);
+            deep_merge(
+                child.as_object_mut().expect("just ensured object"),
+                vo,
+                &path,
+            );
         } else {
             acc.insert(key.clone(), val.clone());
         }
@@ -194,7 +210,11 @@ fn deep_merge(acc: &mut Map<String, Value>, overlay: &Map<String, Value>, prefix
 fn leaf_paths(value: &Value, prefix: &str, out: &mut Vec<String>) {
     let Some(obj) = value.as_object() else { return };
     for (key, val) in obj {
-        let path = if prefix.is_empty() { key.clone() } else { format!("{prefix}.{key}") };
+        let path = if prefix.is_empty() {
+            key.clone()
+        } else {
+            format!("{prefix}.{key}")
+        };
         if is_union_list(&path) {
             continue;
         }
@@ -228,7 +248,10 @@ fn slice_over(ours: &Value, base: &Value) -> OwnedSlice {
             union_lists.push(ul.to_string());
         }
     }
-    OwnedSlice { exclusive, union_lists }
+    OwnedSlice {
+        exclusive,
+        union_lists,
+    }
 }
 
 /// The owned slice of the currently-declared config alone (no base) — for `show`.
@@ -256,7 +279,9 @@ fn show(ctx: &Ctx) -> anyhow::Result<()> {
     println!("  file:  {}", sp::settings_path(&ctx.home).display());
     println!();
     if slice.exclusive.is_empty() && slice.union_lists.is_empty() {
-        println!("  (no managed keys — add fragments under the store dir, or `dotfiles claude set`)");
+        println!(
+            "  (no managed keys — add fragments under the store dir, or `dotfiles claude set`)"
+        );
         return Ok(());
     }
     for path in &slice.exclusive {
@@ -287,7 +312,8 @@ fn print_row(synced: bool, key: &str, declared: Option<Value>, live: Option<Valu
     }
     println!(
         "      live:     {}",
-        live.map(|v| compact(&v)).unwrap_or_else(|| "(unset)".into())
+        live.map(|v| compact(&v))
+            .unwrap_or_else(|| "(unset)".into())
     );
 }
 
@@ -338,7 +364,9 @@ fn set(ctx: &Ctx, key: &str, value: &str) -> anyhow::Result<()> {
         // Lists are additive: union the new entries into what the manual fragment
         // already declares, so successive `set`s accumulate rather than replace.
         // (To replace or drop entries, edit the fragment or `unset` the whole key.)
-        let mut entries = sp::get(&frag, key).and_then(|v| v.as_array().cloned()).unwrap_or_default();
+        let mut entries = sp::get(&frag, key)
+            .and_then(|v| v.as_array().cloned())
+            .unwrap_or_default();
         let mut n = 0;
         for e in parsed.as_array().cloned().unwrap_or_default() {
             if !entries.contains(&e) {
@@ -347,7 +375,10 @@ fn set(ctx: &Ctx, key: &str, value: &str) -> anyhow::Result<()> {
             }
         }
         set_dotted(&mut frag, key, Some(Value::Array(entries)));
-        format!("added {n} entr{} to {key}", if n == 1 { "y" } else { "ies" })
+        format!(
+            "added {n} entr{} to {key}",
+            if n == 1 { "y" } else { "ies" }
+        )
     } else {
         set_dotted(&mut frag, key, Some(parsed));
         format!("set {key}")
@@ -377,7 +408,12 @@ fn unset(ctx: &Ctx, key: &str) -> anyhow::Result<()> {
         }
         project_loaded(ctx, &ours, false)
     })();
-    finish_transaction(outcome, previous, &frag_path, &format!("unset {key} in {}", frag_path.display()))
+    finish_transaction(
+        outcome,
+        previous,
+        &frag_path,
+        &format!("unset {key} in {}", frag_path.display()),
+    )
 }
 
 /// Persist `frag` to `frag_path`, then project. If the projection is refused (e.g.
@@ -456,8 +492,20 @@ mod tests {
     fn deep_merge_recurses_objects_and_unions_permissions() {
         // Regression (#1): a partial env fragment must not wipe sibling env vars.
         let mut acc = Map::new();
-        deep_merge(&mut acc, json!({ "env": { "A": "1" }, "permissions": { "allow": ["a"] } }).as_object().unwrap(), "");
-        deep_merge(&mut acc, json!({ "env": { "B": "2" }, "permissions": { "allow": ["b"] } }).as_object().unwrap(), "");
+        deep_merge(
+            &mut acc,
+            json!({ "env": { "A": "1" }, "permissions": { "allow": ["a"] } })
+                .as_object()
+                .unwrap(),
+            "",
+        );
+        deep_merge(
+            &mut acc,
+            json!({ "env": { "B": "2" }, "permissions": { "allow": ["b"] } })
+                .as_object()
+                .unwrap(),
+            "",
+        );
         let v = Value::Object(acc);
         assert_eq!(v["env"]["A"], "1", "sibling preserved");
         assert_eq!(v["env"]["B"], "2");
@@ -476,7 +524,10 @@ mod tests {
         assert!(paths.contains(&"env.A".to_string()) && paths.contains(&"env.B".to_string()));
         // Regression (#7): permissions.defaultMode is an owned leaf, not dropped.
         assert!(paths.contains(&"permissions.defaultMode".to_string()));
-        assert!(!paths.iter().any(|p| p == "permissions.allow"), "allow is a union list, not a leaf");
+        assert!(
+            !paths.iter().any(|p| p == "permissions.allow"),
+            "allow is a union list, not a leaf"
+        );
     }
 
     #[test]
@@ -484,7 +535,10 @@ mod tests {
         let ours = json!({ "permissions": { "allow": ["Bash(dotfiles:*)"] } });
         let base = json!({ "statusLine": { "command": "s.sh" }, "permissions": { "deny": ["x"] } });
         let s = slice_over(&ours, &base);
-        assert!(s.exclusive.contains(&"statusLine.command".to_string()), "base-only leaf covered");
+        assert!(
+            s.exclusive.contains(&"statusLine.command".to_string()),
+            "base-only leaf covered"
+        );
         assert!(s.union_lists.contains(&"permissions.allow".to_string()));
         assert!(s.union_lists.contains(&"permissions.deny".to_string()));
     }
@@ -494,9 +548,27 @@ mod tests {
         // A non-object fragment is rejected.
         assert!(validate_fragment(&json!([1, 2]), Path::new("f.json")).is_err());
         // Every shared concat-list must be an array (else union handling breaks).
-        assert!(validate_fragment(&json!({ "permissions": { "allow": "x" } }), Path::new("f.json")).is_err());
-        assert!(validate_fragment(&json!({ "permissions": { "ask": "x" } }), Path::new("f.json")).is_err());
-        assert!(validate_fragment(&json!({ "permissions": { "allow": ["ok"], "ask": ["y"] } }), Path::new("f.json")).is_ok());
+        assert!(
+            validate_fragment(
+                &json!({ "permissions": { "allow": "x" } }),
+                Path::new("f.json")
+            )
+            .is_err()
+        );
+        assert!(
+            validate_fragment(
+                &json!({ "permissions": { "ask": "x" } }),
+                Path::new("f.json")
+            )
+            .is_err()
+        );
+        assert!(
+            validate_fragment(
+                &json!({ "permissions": { "allow": ["ok"], "ask": ["y"] } }),
+                Path::new("f.json")
+            )
+            .is_ok()
+        );
         // A scalar at an object-typed key is NOT a validate error — it is caught at
         // project time by the structural guard against the live document.
         assert!(validate_fragment(&json!({ "env": "x" }), Path::new("f.json")).is_ok());

@@ -6,9 +6,15 @@ deciders:
   - claude
 related:
   - ADR-010
+  - ADR-013
 ---
 
 # ADR-200: The store pins the CLI and pull enforces the pin
+
+> **Amended by [ADR-013](../foundation/ADR-013-three-repos-tool-registry-store-and-a-host-binding-outside-the-store.md)
+> §1, §7.** The pin gains a second reader: a registry entry declares
+> `cli = ">=<version>"` in `registry.toml`, and `dotfiles init` refuses to copy
+> in an entry the running binary cannot read. The mechanism here is unchanged.
 
 ## Context
 

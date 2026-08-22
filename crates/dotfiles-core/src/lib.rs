@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+pub mod binding;
 pub mod deploy;
 pub mod edit;
 pub mod pkg;

@@ -228,13 +228,12 @@ pub fn reconcile(repo_root: &Path) {
 /// Report drift we could not heal, naming the manual remedy.
 ///
 /// The pull itself has succeeded; this is the only place the operator learns
-/// the binary half is behind, so it must say what to run — with an absolute
-/// path, since `pull` works from anywhere in the store.
-fn warn(repo_root: &Path, pin: &Pin, reason: &str) {
+/// the binary half is behind, so it must say what to run. The store carries no
+/// installer (ADR-013), so the remedy is the tool's own.
+fn warn(_repo_root: &Path, pin: &Pin, reason: &str) {
     eprintln!("warning: could not self-update ({reason})");
     eprintln!(
-        "  install {pin} manually: {}",
-        repo_root.join("install.sh").display()
+        "  install {pin} manually: DOTFILES_VERSION={pin} curl -fsSL https://raw.githubusercontent.com/{REPO}/main/install.sh | bash"
     );
 }
 
