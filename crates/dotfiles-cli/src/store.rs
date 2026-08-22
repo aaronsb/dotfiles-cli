@@ -268,9 +268,16 @@ pub const STORE_ONLY: &[&str] = &[
     "CLAUDE.md",
 ];
 
-/// After a `--no-commit` merge: un-delete store-only paths the upstream lacks,
-/// and graft the store's profile tables and variants back onto the manifest.
+/// After a `--no-commit` merge: un-delete store-only paths the upstream lacks
+/// — the fixed list plus the manifest's `[store] local` — and graft the
+/// store's profile tables, variants, and `[store]` back onto the manifest.
 fn restore_store_only(store: &Path) -> anyhow::Result<()> {
+    // The store's own declaration, read from before the merge.
+    let local = git_stdout(store, &["show", "ORIG_HEAD:.dotfiles-manifest.toml"])
+        .ok()
+        .and_then(|src| dotfiles_core::Manifest::from_toml(&src).ok())
+        .map(|m| m.store)
+        .unwrap_or_default();
     let deleted = git_stdout(
         store,
         &["diff", "--cached", "--name-only", "--diff-filter=D"],
@@ -280,7 +287,7 @@ fn restore_store_only(store: &Path) -> anyhow::Result<()> {
     let unmerged = unmerged_paths(store)?;
     for path in deleted.lines().map(str::to_string).chain(unmerged) {
         let top = path.split('/').next().unwrap_or(&path);
-        if STORE_ONLY.contains(&top) {
+        if STORE_ONLY.contains(&top) || local.is_local(&path) {
             git(store, &["checkout", "--quiet", "ORIG_HEAD", "--", &path])?;
             git(store, &["add", "--", &path])?;
         }
