@@ -20,7 +20,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const REPO: &str = "aaronsb/dotfiles-cli";
+const REPO: &str = "dotarchy/dotfiles-cli";
 const PIN_FILE: &str = ".dotfiles-cli.version";
 /// Set to any non-empty value to keep `pull` from touching the binary.
 const OPT_OUT: &str = "DOTFILES_NO_SELF_UPDATE";

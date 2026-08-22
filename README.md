@@ -1,7 +1,7 @@
 # dotfiles
 
-![License](https://img.shields.io/github/license/aaronsb/dotfiles-cli)
-![Latest Release](https://img.shields.io/github/v/release/aaronsb/dotfiles-cli?include_prereleases&label=version)
+![License](https://img.shields.io/github/license/dotarchy/dotfiles-cli)
+![Latest Release](https://img.shields.io/github/v/release/dotarchy/dotfiles-cli?include_prereleases&label=version)
 
 A small CLI for a symlink-based dotfiles store whose manifest explains itself:
 every managed file carries the reason it is managed.
@@ -19,7 +19,7 @@ rather than an ISO; nothing here requires Arch.
 One line installs the CLI, binds this machine to a store, and offers a deploy:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/aaronsb/dotfiles-cli/main/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/dotarchy/dotfiles-cli/main/bootstrap.sh | bash
 ```
 
 > **Don't trust this. Read it first.** The rule the AUR applies to every
@@ -29,7 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/aaronsb/dotfiles-cli/main/bootstrap
 > it — it is short on purpose:
 >
 > ```bash
-> curl -fsSLO https://raw.githubusercontent.com/aaronsb/dotfiles-cli/main/bootstrap.sh
+> curl -fsSLO https://raw.githubusercontent.com/dotarchy/dotfiles-cli/main/bootstrap.sh
 > less bootstrap.sh          # and install.sh, which it calls
 > bash bootstrap.sh
 > ```
@@ -58,7 +58,7 @@ What happens:
 Non-interactive, for a second machine:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/aaronsb/dotfiles-cli/main/bootstrap.sh \
+curl -fsSL https://raw.githubusercontent.com/dotarchy/dotfiles-cli/main/bootstrap.sh \
   | bash -s -- --config com.example.dotfiles --remote github --profile laptop
 ```
 
