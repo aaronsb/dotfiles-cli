@@ -268,9 +268,10 @@ pub const STORE_ONLY: &[&str] = &[
     "CLAUDE.md",
 ];
 
-/// After a `--no-commit` merge: un-delete store-only paths the upstream lacks
-/// — the fixed list plus the manifest's `[store] local` — and graft the
-/// store's profile tables, variants, and `[store]` back onto the manifest.
+/// After a `--no-commit` merge: keep the store's version of every store-only
+/// path — the fixed list plus the manifest's `[store] local` — whatever
+/// upstream did to it, and graft the store's profile tables, variants, and
+/// `[store]` back onto the manifest.
 fn restore_store_only(store: &Path) -> anyhow::Result<()> {
     // The store's own declaration, read from before the merge.
     let local = git_stdout(store, &["show", "ORIG_HEAD:.dotfiles-manifest.toml"])
@@ -278,18 +279,25 @@ fn restore_store_only(store: &Path) -> anyhow::Result<()> {
         .and_then(|src| dotfiles_core::Manifest::from_toml(&src).ok())
         .map(|m| m.store)
         .unwrap_or_default();
-    let deleted = git_stdout(
-        store,
-        &["diff", "--cached", "--name-only", "--diff-filter=D"],
-    )?;
-    // Clean deletions are staged; a file the store changed and upstream
-    // dropped is an unmerged modify/delete. Both resolve to "keep ours".
+    // Everything the merge touched; store-only paths resolve to "keep ours",
+    // whether upstream deleted, changed, or conflicted on them.
+    let changed = git_stdout(store, &["diff", "--cached", "--name-only"])?;
     let unmerged = unmerged_paths(store)?;
-    for path in deleted.lines().map(str::to_string).chain(unmerged) {
+    for path in changed.lines().map(str::to_string).chain(unmerged) {
         let top = path.split('/').next().unwrap_or(&path);
-        if STORE_ONLY.contains(&top) || local.is_local(&path) {
+        if !(STORE_ONLY.contains(&top) || local.is_local(&path)) {
+            continue;
+        }
+        let ours = git(store, &["cat-file", "-e", &format!("ORIG_HEAD:{path}")])?
+            .status
+            .success();
+        if ours {
             git(store, &["checkout", "--quiet", "ORIG_HEAD", "--", &path])?;
             git(store, &["add", "--", &path])?;
+        } else {
+            // Upstream added a file under a local path; the store never had it.
+            git(store, &["rm", "--quiet", "--cached", "--", &path])?;
+            let _ = std::fs::remove_file(store.join(&path));
         }
     }
     let manifest = store.join(".dotfiles-manifest.toml");
