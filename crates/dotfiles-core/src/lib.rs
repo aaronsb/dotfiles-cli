@@ -152,8 +152,18 @@ pub struct Spec {
     pub extra: BTreeMap<String, toml::Value>,
 }
 
+/// `[store]` — what the store keeps that a registry entry never carries
+/// (ADR-013 §6). Grafted back after an upstream merge; stripped on publish.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoreSection {
+    /// Repo-relative paths (files or directory prefixes) inside managed
+    /// entries that are per-machine content, e.g. `zsh/.zsh/host.d`.
+    #[serde(default)]
+    pub local: Vec<String>,
+}
+
 /// The parsed manifest: a TOML array-of-tables of `[[entry]]` (ADR-003), plus an
-/// optional `[profiles]` registry.
+/// optional `[profiles]` registry and an optional `[store]` section.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Manifest {
     #[serde(default, rename = "entry")]
@@ -162,6 +172,19 @@ pub struct Manifest {
     /// manifest with no profiles behaves as a single implicit profile.
     #[serde(default)]
     pub profiles: BTreeMap<String, Profile>,
+    #[serde(default)]
+    pub store: StoreSection,
+}
+
+impl StoreSection {
+    /// Is `path` (repo-relative) one of the store's local paths, or under one?
+    pub fn is_local(&self, path: &str) -> bool {
+        let path = path.trim_end_matches('/');
+        self.local.iter().any(|l| {
+            let l = l.trim_end_matches('/');
+            path == l || path.starts_with(&format!("{l}/"))
+        })
+    }
 }
 
 impl Manifest {
@@ -187,7 +210,11 @@ impl Manifest {
                 ..e.clone()
             })
             .collect();
-        Manifest { entries, profiles: self.profiles.clone() }
+        Manifest {
+            entries,
+            profiles: self.profiles.clone(),
+            store: self.store.clone(),
+        }
     }
 }
 
@@ -277,13 +304,21 @@ pub fn deploy_status(entry: &Entry, repo_root: &Path, home: &Path) -> DeployStat
     let meta = match std::fs::symlink_metadata(&target) {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return DeployStatus::Missing,
-        Err(e) => return DeployStatus::Error { message: e.to_string() },
+        Err(e) => {
+            return DeployStatus::Error {
+                message: e.to_string(),
+            };
+        }
     };
 
     if meta.file_type().is_symlink() {
         let link = match std::fs::read_link(&target) {
             Ok(l) => l,
-            Err(e) => return DeployStatus::Error { message: e.to_string() },
+            Err(e) => {
+                return DeployStatus::Error {
+                    message: e.to_string(),
+                };
+            }
         };
         let resolved = if link.is_absolute() {
             link
@@ -298,7 +333,9 @@ pub fn deploy_status(entry: &Entry, repo_root: &Path, home: &Path) -> DeployStat
                 DeployStatus::Broken
             }
         } else {
-            DeployStatus::WrongTarget { points_to: resolved.display().to_string() }
+            DeployStatus::WrongTarget {
+                points_to: resolved.display().to_string(),
+            }
         }
     } else {
         // A real file/dir sits at the target.
@@ -383,6 +420,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn store_local_paths_match_by_prefix() {
+        let m =
+            Manifest::from_toml("[store]\nlocal = [\"zsh/.zsh/host.d\", \"notes.md\"]\n").unwrap();
+        assert!(m.store.is_local("zsh/.zsh/host.d"));
+        assert!(m.store.is_local("zsh/.zsh/host.d/north/00-identity"));
+        assert!(m.store.is_local("notes.md"));
+        assert!(!m.store.is_local("zsh/.zsh/host.dx"));
+        assert!(!m.store.is_local("zsh/.zshrc"));
+        assert!(!Manifest::default().store.is_local("anything"));
+    }
+
+    #[test]
     fn parses_array_of_tables_with_why() {
         let src = r#"
             [[entry]]
@@ -403,7 +452,10 @@ mod tests {
         assert_eq!(m.entries[0].name, "zsh");
         assert_eq!(m.entries[0].mode, Mode::Symlink); // defaulted
         assert!(m.entries[0].enabled); // defaulted true
-        assert_eq!(m.entries[0].why.as_deref(), Some("Cross-machine shell baseline."));
+        assert_eq!(
+            m.entries[0].why.as_deref(),
+            Some("Cross-machine shell baseline.")
+        );
         assert!(!m.entries[1].enabled);
         assert!(m.entries[1].why.is_none());
         assert!(m.entries[0].spec.is_none());
@@ -495,13 +547,18 @@ mod tests {
         "#;
         let m = Manifest::from_toml(src).expect("parses");
         assert_eq!(m.profiles.len(), 2);
-        assert_eq!(m.profiles["desktop"].description.as_deref(), Some("Main workstation"));
+        assert_eq!(
+            m.profiles["desktop"].description.as_deref(),
+            Some("Main workstation")
+        );
         assert_eq!(m.profiles["vm"].match_pattern.as_deref(), Some("vm-*"));
 
         let shared = &m.entries[0];
         let kde = &m.entries[1];
         // Universal entry is active everywhere; tagged entry only in its profile.
-        assert!(shared.active_in("desktop") && shared.active_in("vm") && shared.active_in("anything"));
+        assert!(
+            shared.active_in("desktop") && shared.active_in("vm") && shared.active_in("anything")
+        );
         assert!(kde.active_in("desktop"));
         assert!(!kde.active_in("vm"));
     }

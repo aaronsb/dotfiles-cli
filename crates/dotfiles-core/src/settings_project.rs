@@ -107,8 +107,12 @@ pub fn project_value(
     let base_obj = base.as_object().cloned().unwrap_or_default();
     use crate::settings_merge::get_path;
     for path in &slice.exclusive {
-        let Some(ours_v) = get_path(&ours_obj, path) else { continue }; // not asserting
-        let Some(live_v) = get_path(live_obj, path) else { continue }; // nothing to clobber
+        let Some(ours_v) = get_path(&ours_obj, path) else {
+            continue;
+        }; // not asserting
+        let Some(live_v) = get_path(live_obj, path) else {
+            continue;
+        }; // nothing to clobber
         if !live_v.is_object() && !live_v.is_array() {
             continue; // overwriting a scalar is fine
         }
@@ -117,7 +121,11 @@ pub fn project_value(
         }
         return Err(format!(
             "refusing to project: settings.json has {} at '{path}' that this tool did not write — overwriting it would lose foreign data; reconcile settings.json or the fragment",
-            if live_v.is_object() { "an object" } else { "an array" }
+            if live_v.is_object() {
+                "an object"
+            } else {
+                "an array"
+            }
         ));
     }
     // Union lists: a foreign NON-array at a list path cannot be safely unioned into
@@ -143,7 +151,11 @@ pub fn project_value(
         );
     }
     let changed = &m.settings != live;
-    Ok(Projection { settings: m.settings, base: m.base, changed })
+    Ok(Projection {
+        settings: m.settings,
+        base: m.base,
+        changed,
+    })
 }
 
 /// Full projection with I/O: read the live settings, merge against the caller-
@@ -202,7 +214,10 @@ mod tests {
     fn slice() -> OwnedSlice {
         // Leaf-path ownership (as the CLI derives): own statusLine.command, not the
         // whole statusLine object.
-        OwnedSlice::new(&["statusLine.command"], &["permissions.allow", "permissions.deny"])
+        OwnedSlice::new(
+            &["statusLine.command"],
+            &["permissions.allow", "permissions.deny"],
+        )
     }
 
     fn tmp(tag: &str) -> PathBuf {
@@ -216,10 +231,13 @@ mod tests {
         let sp = dir.join("settings.json");
         let bp = dir.join("base.json");
         // A live file with a foreign /config key and another tool's allow entry.
-        atomic_write_json(&sp, &json!({
-            "model": "opus",
-            "permissions": { "allow": ["Bash(ways:*)"] }
-        }))
+        atomic_write_json(
+            &sp,
+            &json!({
+                "model": "opus",
+                "permissions": { "allow": ["Bash(ways:*)"] }
+            }),
+        )
         .unwrap();
 
         let ours = json!({
@@ -297,7 +315,13 @@ mod tests {
         // live.hooks.PreToolUse is a foreign array (agent-ways) → refuse.
         let live_arr = json!({ "hooks": { "PreToolUse": [{ "x": 1 }] } });
         assert!(
-            project_value(&s, &live_arr, &json!({ "hooks": { "PreToolUse": [{ "y": 2 }] } }), &json!({})).is_err()
+            project_value(
+                &s,
+                &live_arr,
+                &json!({ "hooks": { "PreToolUse": [{ "y": 2 }] } }),
+                &json!({})
+            )
+            .is_err()
         );
         // But asserting a scalar *leaf* (env.A) over a scalar live value is fine —
         // the foreign sibling is preserved and no structure is clobbered.
@@ -319,7 +343,10 @@ mod tests {
         let ours = json!({ "someList": ["a", "b"] });
         let first = project_value(&s, &json!({}), &ours, &json!({})).unwrap();
         let second = project_value(&s, &first.settings, &ours, &first.base);
-        assert!(second.is_ok(), "our own array leaf must reproject, not refuse");
+        assert!(
+            second.is_ok(),
+            "our own array leaf must reproject, not refuse"
+        );
         // A genuinely foreign array (base did not record it) is still refused.
         let foreign = project_value(&s, &json!({ "someList": ["x"] }), &ours, &json!({}));
         assert!(foreign.is_err());
@@ -362,7 +389,10 @@ mod tests {
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
         assert!(res.is_err(), "must abort when the backup cannot be written");
         let after = read_json_or_empty(&sp).unwrap();
-        assert!(after.get("statusLine").is_none(), "settings.json must be left untouched");
+        assert!(
+            after.get("statusLine").is_none(),
+            "settings.json must be left untouched"
+        );
         assert_eq!(after["model"], "opus");
         std::fs::remove_dir_all(&dir).ok();
     }

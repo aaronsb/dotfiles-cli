@@ -70,7 +70,11 @@ pub fn deploy_entry(
     let exists = match std::fs::symlink_metadata(&target) {
         Ok(_) => true,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-        Err(e) => return DeployOutcome::Error { message: e.to_string() },
+        Err(e) => {
+            return DeployOutcome::Error {
+                message: e.to_string(),
+            };
+        }
     };
 
     let mut backed_up = None;
@@ -84,10 +88,14 @@ pub fn deploy_entry(
         if !opts.dry_run {
             let dir = backup_dir(home);
             if let Err(e) = std::fs::create_dir_all(&dir) {
-                return DeployOutcome::Error { message: e.to_string() };
+                return DeployOutcome::Error {
+                    message: e.to_string(),
+                };
             }
             if let Err(e) = std::fs::rename(&target, &dest) {
-                return DeployOutcome::Error { message: e.to_string() };
+                return DeployOutcome::Error {
+                    message: e.to_string(),
+                };
             }
         }
         backed_up = Some(dest);
@@ -98,7 +106,9 @@ pub fn deploy_entry(
         && !opts.dry_run
         && let Err(e) = std::fs::create_dir_all(parent)
     {
-        return DeployOutcome::Error { message: e.to_string() };
+        return DeployOutcome::Error {
+            message: e.to_string(),
+        };
     }
 
     if opts.dry_run {
@@ -111,7 +121,9 @@ pub fn deploy_entry(
     };
     match result {
         Ok(()) => DeployOutcome::Deployed { backed_up },
-        Err(e) => DeployOutcome::Error { message: e.to_string() },
+        Err(e) => DeployOutcome::Error {
+            message: e.to_string(),
+        },
     }
 }
 
@@ -228,9 +240,20 @@ mod tests {
         let skipped = deploy_entry(&e, &repo, &home, DeployOptions::default());
         assert!(matches!(skipped, DeployOutcome::Skipped { .. }));
         // Untouched.
-        assert_eq!(std::fs::read_to_string(home.join(".zshrc")).unwrap(), "pre-existing");
+        assert_eq!(
+            std::fs::read_to_string(home.join(".zshrc")).unwrap(),
+            "pre-existing"
+        );
 
-        let forced = deploy_entry(&e, &repo, &home, DeployOptions { force: true, dry_run: false });
+        let forced = deploy_entry(
+            &e,
+            &repo,
+            &home,
+            DeployOptions {
+                force: true,
+                dry_run: false,
+            },
+        );
         match forced {
             DeployOutcome::Deployed { backed_up: Some(p) } => {
                 assert_eq!(std::fs::read_to_string(&p).unwrap(), "pre-existing");
@@ -252,7 +275,15 @@ mod tests {
         std::fs::write(repo.join("zsh/.zshrc"), "x").unwrap();
         let e = entry("zsh/.zshrc", ".zshrc", Mode::Symlink);
 
-        let out = deploy_entry(&e, &repo, &home, DeployOptions { dry_run: true, force: false });
+        let out = deploy_entry(
+            &e,
+            &repo,
+            &home,
+            DeployOptions {
+                dry_run: true,
+                force: false,
+            },
+        );
         assert_eq!(out, DeployOutcome::Deployed { backed_up: None });
         assert!(!home.join(".zshrc").exists());
 
@@ -268,10 +299,16 @@ mod tests {
         std::fs::create_dir_all(&home).unwrap();
 
         let mut e = entry("nope/.x", ".x", Mode::Symlink);
-        assert_eq!(deploy_entry(&e, &repo, &home, DeployOptions::default()), DeployOutcome::SourceMissing);
+        assert_eq!(
+            deploy_entry(&e, &repo, &home, DeployOptions::default()),
+            DeployOutcome::SourceMissing
+        );
 
         e.enabled = false;
-        assert_eq!(deploy_entry(&e, &repo, &home, DeployOptions::default()), DeployOutcome::Disabled);
+        assert_eq!(
+            deploy_entry(&e, &repo, &home, DeployOptions::default()),
+            DeployOutcome::Disabled
+        );
 
         std::fs::remove_dir_all(&base).ok();
     }

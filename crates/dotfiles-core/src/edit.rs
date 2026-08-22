@@ -433,6 +433,9 @@ pub fn graft_store_sections(merged: &mut DocumentMut, store: &DocumentMut) {
     if let Some(profiles) = store.get("profiles") {
         merged["profiles"] = profiles.clone();
     }
+    if let Some(local) = store.get("store") {
+        merged["store"] = local.clone();
+    }
     let Some(src) = store.get("entry").and_then(Item::as_array_of_tables) else {
         return;
     };
@@ -479,6 +482,9 @@ paths.slab = "gone-slab"
 
 [profiles.slab]
 description = "laptop"
+
+[store]
+local = ["zsh/.zsh/host.d"]
 "#,
         )
         .unwrap();
@@ -495,6 +501,7 @@ why = "upstream changed this"
         graft_store_sections(&mut merged, &store);
         let out = merged.to_string();
         assert!(out.contains("[profiles.slab]"));
+        assert!(out.contains("zsh/.zsh/host.d"));
         assert!(out.contains("nvim-slab"));
         assert!(out.contains("upstream changed this"));
         assert!(!out.contains("gone-slab"));

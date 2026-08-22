@@ -1005,6 +1005,7 @@ mod tests {
         let manifest = Manifest {
             entries: vec![e.clone(), other],
             profiles: Default::default(),
+            store: Default::default(),
         };
 
         // The happy path: a fresh, store-relative path nobody else uses.

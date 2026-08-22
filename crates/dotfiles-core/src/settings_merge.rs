@@ -82,7 +82,9 @@ pub fn set_path(obj: &mut Map<String, Value>, path: &str, value: Value) {
     let (leaf, parents) = segs.split_last().expect("non-empty path");
     let mut cur = obj;
     for seg in parents {
-        let child = cur.entry((*seg).to_string()).or_insert_with(|| Value::Object(Map::new()));
+        let child = cur
+            .entry((*seg).to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
         if !child.is_object() {
             *child = Value::Object(Map::new());
         }
@@ -116,7 +118,10 @@ fn remove_path_inner(obj: &mut Map<String, Value>, segs: &[&str]) {
 /// Entries are kept as `Value`s (not coerced to strings) so a non-string foreign
 /// entry round-trips through merge and self-audit identically.
 fn get_array(obj: &Map<String, Value>, path: &str) -> Vec<Value> {
-    get_path(obj, path).and_then(|v| v.as_array()).cloned().unwrap_or_default()
+    get_path(obj, path)
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default()
 }
 
 /// Set (or, if empty, remove) the array at a dotted `path`, pruning empty parents.
@@ -165,8 +170,11 @@ pub fn merge(slice: &OwnedSlice, live: &Value, ours: &Value, base: &Value) -> Me
         // base recorded never revokes another writer's entry. If that contract is
         // violated (two writers assert the same string), this removes a co-owned
         // entry — an accepted bound of additive union, matching the reference.
-        let deprecated: Vec<Value> =
-            base_entries.iter().filter(|e| !ours_entries.contains(e)).cloned().collect();
+        let deprecated: Vec<Value> = base_entries
+            .iter()
+            .filter(|e| !ours_entries.contains(e))
+            .cloned()
+            .collect();
 
         // Keep their entries except our deprecated and current ones (current
         // re-appended below — dropping first dedupes a re-apply). Value-based, so a
@@ -180,7 +188,10 @@ pub fn merge(slice: &OwnedSlice, live: &Value, ours: &Value, base: &Value) -> Me
         set_or_remove_array(&mut out, path, result);
     }
 
-    Merged { settings: Value::Object(out), base: base_for(slice, &ours_obj) }
+    Merged {
+        settings: Value::Object(out),
+        base: base_for(slice, &ours_obj),
+    }
 }
 
 /// The base to persist: exactly the slice we asserted this run.
@@ -217,8 +228,10 @@ pub fn stripped_user_view(slice: &OwnedSlice, settings: &Value, base: &Value) ->
         if owned.is_empty() {
             continue;
         }
-        let kept: Vec<Value> =
-            get_array(&obj, path).into_iter().filter(|v| !owned.contains(v)).collect();
+        let kept: Vec<Value> = get_array(&obj, path)
+            .into_iter()
+            .filter(|v| !owned.contains(v))
+            .collect();
         set_or_remove_array(&mut obj, path, kept);
     }
     Value::Object(obj)
@@ -280,7 +293,8 @@ mod tests {
 
     #[test]
     fn merge_is_idempotent() {
-        let ours = json!({ "env": { "FOO": "1" }, "permissions": { "allow": ["Bash(dotfiles:*)"] } });
+        let ours =
+            json!({ "env": { "FOO": "1" }, "permissions": { "allow": ["Bash(dotfiles:*)"] } });
         let first = merge(&slice(), &json!({}), &ours, &json!({}));
         let second = merge(&slice(), &first.settings, &ours, &first.base);
         assert_eq!(first.settings, second.settings);
@@ -294,9 +308,16 @@ mod tests {
         let ours = json!({ "env": { "FOO": "new" } });
         let m = merge(&slice(), &live, &ours, &json!({}));
         assert_eq!(m.settings["env"]["FOO"], "new");
-        assert_eq!(m.settings["env"]["HTTP_PROXY"], "http://p", "foreign sibling preserved");
+        assert_eq!(
+            m.settings["env"]["HTTP_PROXY"], "http://p",
+            "foreign sibling preserved"
+        );
         let before = stripped_user_view(&slice(), &live, &owned_union(&slice(), &json!({}), &ours));
-        let after = stripped_user_view(&slice(), &m.settings, &owned_union(&slice(), &json!({}), &ours));
+        let after = stripped_user_view(
+            &slice(),
+            &m.settings,
+            &owned_union(&slice(), &json!({}), &ours),
+        );
         assert_eq!(before, after, "self-audit sees the preserved sibling");
     }
 
@@ -307,7 +328,10 @@ mod tests {
         let live = json!({ "statusLine": { "command": "Z" } });
         let base = json!({ "statusLine": { "command": "X" } });
         let m = merge(&slice(), &live, &json!({}), &base);
-        assert_eq!(m.settings["statusLine"]["command"], "Z", "foreign edit kept");
+        assert_eq!(
+            m.settings["statusLine"]["command"], "Z",
+            "foreign edit kept"
+        );
     }
 
     #[test]
@@ -315,7 +339,10 @@ mod tests {
         let live = json!({ "statusLine": { "command": "X" }, "model": "opus" });
         let base = json!({ "statusLine": { "command": "X" } });
         let m = merge(&slice(), &live, &json!({}), &base);
-        assert!(m.settings.get("statusLine").is_none(), "our own unchanged value dropped");
+        assert!(
+            m.settings.get("statusLine").is_none(),
+            "our own unchanged value dropped"
+        );
         assert_eq!(m.settings["model"], "opus");
     }
 
@@ -329,8 +356,14 @@ mod tests {
         let m = merge(&slice(), &live, &ours, &json!({}));
         assert_eq!(m.settings["model"], "opus");
         assert_eq!(m.settings["autoCompactEnabled"], true);
-        assert_eq!(allow(&m.settings), vec![json!("Bash(ways:*)"), json!("Bash(dotfiles:*)")]);
-        assert_eq!(get_array(m.settings.as_object().unwrap(), "permissions.deny"), vec![json!("Read(~/.ssh/**)")]);
+        assert_eq!(
+            allow(&m.settings),
+            vec![json!("Bash(ways:*)"), json!("Bash(dotfiles:*)")]
+        );
+        assert_eq!(
+            get_array(m.settings.as_object().unwrap(), "permissions.deny"),
+            vec![json!("Read(~/.ssh/**)")]
+        );
     }
 
     #[test]
@@ -341,7 +374,10 @@ mod tests {
         let base = json!({ "permissions": { "allow": ["Bash(old-tool:*)"] } });
         let ours = json!({ "permissions": { "allow": ["Bash(dotfiles:*)"] } });
         let m = merge(&slice(), &live, &ours, &base);
-        assert_eq!(allow(&m.settings), vec![json!("Bash(user-thing:*)"), json!("Bash(dotfiles:*)")]);
+        assert_eq!(
+            allow(&m.settings),
+            vec![json!("Bash(user-thing:*)"), json!("Bash(dotfiles:*)")]
+        );
     }
 
     #[test]
@@ -354,7 +390,10 @@ mod tests {
         let before = stripped_user_view(&slice(), &live, &audit);
         let m = merge(&slice(), &live, &ours, &json!({}));
         let after = stripped_user_view(&slice(), &m.settings, &audit);
-        assert!(allow(&m.settings).contains(&json!({"weird": true})), "non-string entry preserved");
+        assert!(
+            allow(&m.settings).contains(&json!({"weird": true})),
+            "non-string entry preserved"
+        );
         assert_eq!(before, after, "no spurious self-audit divergence");
     }
 
@@ -373,6 +412,9 @@ mod tests {
         let live = json!({ "permissions": { "deny": ["Read(~/.config/gh/**)"] } });
         let base = json!({ "permissions": { "deny": ["Read(~/.config/gh/**)"] } });
         let m = merge(&slice(), &live, &json!({}), &base);
-        assert!(m.settings.get("permissions").is_none(), "emptied permissions pruned");
+        assert!(
+            m.settings.get("permissions").is_none(),
+            "emptied permissions pruned"
+        );
     }
 }

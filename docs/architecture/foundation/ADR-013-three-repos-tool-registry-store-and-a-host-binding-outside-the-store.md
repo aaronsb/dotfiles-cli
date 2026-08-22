@@ -168,7 +168,11 @@ relationship is a subtree, not a remote:
   **cannot delete it**: `packages/`, `.dotfiles-cli.version`, `.gitignore`,
   the store's README and CLAUDE.md are restored if upstream lacks them, and
   the manifest's `[profiles.*]` tables and `paths.*` variants are grafted
-  back onto the merged manifest. First install is the same fetch onto an
+  back onto the merged manifest. Per-machine content that lives *inside* a
+  managed entry — a `host.d/` of per-host shell overlays — is declared in the
+  manifest as `[store] local = ["zsh/.zsh/host.d"]`; the merge protects those
+  paths the same way, and a registry entry carries neither the paths nor the
+  table. First install is the same fetch onto an
   empty repo, so the store begins with the entry's history and later pulls
   are ordinary related merges.
 - **up** — `dotfiles publish` runs `git subtree split` on the store, strips
