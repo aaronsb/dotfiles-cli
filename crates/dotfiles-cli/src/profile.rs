@@ -929,7 +929,7 @@ fn use_profile(ctx: &Ctx, name: &str) -> anyhow::Result<()> {
         _ => {
             std::fs::write(ctx.repo_root.join(".dotfiles-profile"), format!("{name}\n"))?;
             println!("active profile set to '{name}' (wrote .dotfiles-profile).");
-            println!("hint: run `dotfiles init` to move this host onto a binding (ADR-013).");
+            println!("hint: run `dotfiles init` to move this host onto a binding.");
         }
     }
     Ok(())

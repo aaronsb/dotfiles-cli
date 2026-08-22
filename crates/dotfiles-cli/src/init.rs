@@ -292,7 +292,7 @@ fn reconfigure(plan: &Plan, args: &InitArgs) -> anyhow::Result<()> {
                 let added = ensure_packages_dir(&plan.store, profile.as_deref())?;
                 commit_if_dirty(
                     &plan.store,
-                    "store: Migrate to the ADR-013 host binding",
+                    "store: Migrate to the host binding",
                     &added,
                 )?;
             }
@@ -436,7 +436,7 @@ fn migrate_store(plan: &Plan, args: &InitArgs, current: Option<String>) -> anyho
         let src = std::fs::read_to_string(plan.store.join(LEGACY_LOCAL)).unwrap_or_default();
         if src.contains("[packages]") {
             eprintln!(
-                "note: {LEGACY_LOCAL} pointed packages elsewhere; packages now live in <store>/packages/ (ADR-013 §4). Move them back by hand if you kept any there."
+                "note: {LEGACY_LOCAL} pointed packages elsewhere; packages now live in <store>/packages/. Move them back by hand if you kept any there."
             );
         }
     }

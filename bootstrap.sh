@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bootstrap a host (ADR-013 §5): install the CLI, run `dotfiles init`, offer a
+# Bootstrap a host: install the CLI, run `dotfiles init`, offer a
 # deploy. Safe to re-run — every step is idempotent.
 #
 #   curl -fsSL https://raw.githubusercontent.com/dotarchy/dotfiles-cli/main/bootstrap.sh | bash

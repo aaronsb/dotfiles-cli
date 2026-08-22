@@ -1,7 +1,7 @@
-# dotfiles-tui — manifest fixture (ADR-003 TOML array-of-tables).
+# dotfiles — manifest fixture (TOML array-of-tables).
 #
 # Mirrors the real .dotfiles 14-entry manifest, with agent-drafted `why`
-# docstrings (ADR-002). The `why` strings are intent-first drafts for the human
+# docstrings. The `why` strings are intent-first drafts for the human
 # to refine — they explain *why an entry exists*, not the mechanical *what*.
 #
 # Fields: name, path (source, relative to repo root), target (relative to $HOME),
@@ -93,7 +93,7 @@ name = "zprofile"
 path = "zsh/.zprofile"
 target = ".zprofile"
 why = "Login-shell profile: launches the keyboard-resolving mlterm-fb wrapper by absolute path on bare-VT console login (PATH lacks ~/.local/bin that early)."
-# Demonstrates ADR-006: recognized keys (summary/concern/platform/requires) parse
+# Demonstrates the optional spec: recognized keys (summary/concern/platform/requires) parse
 # into fields; kind/launches/run_mode are unrecognized -> captured & surfaced.
 spec.summary  = "Auto-launch mlterm-fb on bare-VT login, guarded and lockout-proof."
 spec.concern  = "terminal-bootstrap"
