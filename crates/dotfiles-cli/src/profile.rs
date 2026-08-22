@@ -918,7 +918,7 @@ fn use_profile(ctx: &Ctx, name: &str) -> anyhow::Result<()> {
         anyhow::bail!("profile '{name}' is not declared — add it first with `profile add {name}`");
     }
     match ctx.binding.clone() {
-        Some(mut b) if b.store.is_some() => {
+        Some(mut b) if b.store.is_some() && ctx.bound => {
             b.store.as_mut().unwrap().profile = Some(name.to_string());
             b.save(&ctx.binding_path).map_err(|e| anyhow::anyhow!(e))?;
             println!(

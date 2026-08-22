@@ -52,9 +52,11 @@ enum PkgAction {
 }
 
 /// Dispatch the `pkg` verb. A missing sub-action defaults to `status` (local).
+/// Lists are keyed by the active profile (ADR-008 §3), which defaults to the
+/// hostname, so the pre-profile `packages/<host>/` layout keeps working.
 pub fn run(ctx: &Ctx, args: &PkgArgs) -> anyhow::Result<()> {
     let packages_dir = ctx.repo_root.join("packages");
-    let local = short_hostname();
+    let local = ctx.profile.clone();
     let host_or_local = |h: &Option<String>| h.clone().unwrap_or_else(|| local.clone());
 
     match args.action.as_ref() {

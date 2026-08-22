@@ -156,8 +156,10 @@ pub fn cli_satisfies(requirement: &str, running: &str) -> Result<bool, String> {
         .trim_start_matches('v')
         .trim();
     let have = running.trim().trim_start_matches('v');
+    // `0.8.0-rc1` compares as `0.8.0`; the pin parser (selfupdate) does the same.
     let parse = |s: &str| -> Result<(u64, u64, u64), String> {
-        let mut it = s.split('.').map(|p| p.parse::<u64>());
+        let core = s.split_once('-').map_or(s, |(c, _)| c);
+        let mut it = core.split('.').map(|p| p.parse::<u64>());
         let mut next = || {
             it.next()
                 .unwrap_or(Ok(0))
@@ -238,6 +240,8 @@ mod tests {
         assert!(cli_satisfies("0.8", "v0.8.0").unwrap());
         assert!(cli_satisfies(">=0.8.0", "1.0.0").unwrap());
         assert!(cli_satisfies(">=0.8.x", "0.9.0").is_err());
+        assert!(cli_satisfies(">=0.8.0-rc1", "0.8.0").unwrap());
+        assert!(cli_satisfies(">=0.8.0", "0.8.0-rc1").unwrap());
     }
 
     #[test]

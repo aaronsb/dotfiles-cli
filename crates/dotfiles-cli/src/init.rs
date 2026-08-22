@@ -80,14 +80,12 @@ struct Plan {
 pub fn run(cli: &Cli, args: &InitArgs) -> anyhow::Result<()> {
     let home = crate::home_dir(cli)?;
     let binding_path = HostBinding::default_path(&home);
-    let binding = HostBinding::load(&binding_path).map_err(|e| anyhow::anyhow!(e))?;
-    let store = args
-        .store
-        .clone()
-        .map(|p| expand_home(&p.to_string_lossy(), &home))
-        .or_else(|| cli.repo_root.clone())
-        .or_else(|| binding.as_ref().and_then(|b| b.store_path(&home)))
-        .unwrap_or_else(|| home.join(".dotfiles"));
+    let binding = crate::load_binding(&binding_path);
+    // `--store` first, then the same resolution every other verb uses.
+    let store = match &args.store {
+        Some(p) => crate::absolute(&expand_home(&p.to_string_lossy(), &home)),
+        None => crate::resolve_store(cli, &home, binding.as_ref()).0,
+    };
     let plan = Plan {
         home,
         binding_path,
@@ -154,8 +152,12 @@ fn first_install(plan: &Plan, args: &InitArgs) -> anyhow::Result<()> {
     };
 
     let profile = args.profile.clone().or(legacy_profile);
-    ensure_packages_dir(&plan.store, profile.as_deref())?;
-    commit_if_dirty(&plan.store, "store: Initialize host packages directory")?;
+    let added = ensure_packages_dir(&plan.store, profile.as_deref())?;
+    commit_if_dirty(
+        &plan.store,
+        "store: Initialize host packages directory",
+        &added,
+    )?;
     offer_remote(plan, args)?;
     write_binding(plan, &config, profile)?;
     println!(
@@ -207,6 +209,15 @@ fn clone_store(url: &str, store: &Path) -> anyhow::Result<()> {
 fn create_store_from_registry(plan: &Plan, id: &str) -> anyhow::Result<()> {
     let reg = RegistryClone::open(&plan.home)?;
     let split = reg.split(id)?;
+    create_store_from_split(plan, id, &reg, &split)
+}
+
+fn create_store_from_split(
+    plan: &Plan,
+    id: &str,
+    reg: &RegistryClone,
+    split: &str,
+) -> anyhow::Result<()> {
     println!("creating store from {id} ({})", &split[..7]);
     std::fs::create_dir_all(&plan.store)?;
     let out = git(&plan.store, &["init", "--quiet", "-b", "main"])?;
@@ -216,7 +227,7 @@ fn create_store_from_registry(plan: &Plan, id: &str) -> anyhow::Result<()> {
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
-    fetch_split(&plan.store, &reg.path, &split)?;
+    fetch_split(&plan.store, &reg.path, split)?;
     git(&plan.store, &["reset", "--quiet", "--hard", "FETCH_HEAD"])?;
     Ok(())
 }
@@ -226,10 +237,20 @@ fn create_store_from_registry(plan: &Plan, id: &str) -> anyhow::Result<()> {
 fn reconfigure(plan: &Plan, args: &InitArgs) -> anyhow::Result<()> {
     let bound = plan.binding.as_ref().and_then(|b| b.store.as_ref());
     let markers = legacy_markers(&plan.store);
-    let wants_rebase = matches!((&args.config, bound), (Some(id), Some(s)) if *id != s.config);
+    // `--store` naming a different repo than the binding is a rebinding.
+    let bound_here = plan
+        .binding
+        .as_ref()
+        .and_then(|b| b.store_path(&plan.home))
+        .is_some_and(|p| crate::same_dir(&p, &plan.store));
+    // A requested config this store does not already descend from.
+    let wants_rebase = args
+        .config
+        .as_ref()
+        .is_some_and(|id| !(bound_here && bound.is_some_and(|s| s.config == *id)));
 
-    // Already current: a binding exists, nothing legacy remains, no change asked.
-    if bound.is_some()
+    // Already current: bound to this store, nothing legacy remains, no change asked.
+    if bound_here
         && markers.is_empty()
         && args.mode.is_none()
         && !wants_rebase
@@ -241,8 +262,15 @@ fn reconfigure(plan: &Plan, args: &InitArgs) -> anyhow::Result<()> {
 
     let mode = match args.mode {
         Some(m) => m,
-        None if wants_rebase => Mode::Rebase,
-        None if bound.is_some() && markers.is_empty() => Mode::Migrate, // only the profile changes
+        // A legacy store migrates first; the Migrate arm rebases afterwards.
+        None if wants_rebase => {
+            if markers.is_empty() {
+                Mode::Rebase
+            } else {
+                Mode::Migrate
+            }
+        }
+        None if markers.is_empty() => Mode::Migrate, // only the binding changes
         None if plan.what_if => {
             println!("(no --mode given; previewing migrate)");
             Mode::Migrate
@@ -261,8 +289,16 @@ fn reconfigure(plan: &Plan, args: &InitArgs) -> anyhow::Result<()> {
                 .or_else(|| read_legacy_profile(&plan.store));
             let config = migrate_store(plan, args, bound.map(|s| s.config.clone()))?;
             if !plan.what_if {
-                ensure_packages_dir(&plan.store, profile.as_deref())?;
-                commit_if_dirty(&plan.store, "store: Migrate to the ADR-013 host binding")?;
+                let added = ensure_packages_dir(&plan.store, profile.as_deref())?;
+                commit_if_dirty(
+                    &plan.store,
+                    "store: Migrate to the ADR-013 host binding",
+                    &added,
+                )?;
+            }
+            // `--config` asked for ancestry, not a label: rebase after migrating.
+            if wants_rebase {
+                rebase_store(plan, &config)?;
             }
             write_binding(plan, &config, profile)
         }
@@ -283,13 +319,25 @@ fn reconfigure(plan: &Plan, args: &InitArgs) -> anyhow::Result<()> {
                 );
                 return Ok(());
             }
+            // Everything that can fail on the registry side happens before the
+            // live store moves.
+            let reg = RegistryClone::open(&plan.home)?;
+            let split = reg.split(&id)?;
             println!("moving {} -> {}", plan.store.display(), backup.display());
             std::fs::create_dir_all(backup.parent().unwrap())?;
-            std::fs::rename(&plan.store, &backup)?;
-            create_store_from_registry(plan, &id)?;
+            std::fs::rename(&plan.store, &backup).map_err(|e| {
+                anyhow::anyhow!(
+                    "moving the store aside: {e} (a backup on another filesystem needs a manual move)"
+                )
+            })?;
+            create_store_from_split(plan, &id, &reg, &split)?;
             let profile = args.profile.clone();
-            ensure_packages_dir(&plan.store, profile.as_deref())?;
-            commit_if_dirty(&plan.store, "store: Initialize host packages directory")?;
+            let added = ensure_packages_dir(&plan.store, profile.as_deref())?;
+            commit_if_dirty(
+                &plan.store,
+                "store: Initialize host packages directory",
+                &added,
+            )?;
             offer_remote(plan, args)?;
             write_binding(plan, &id, profile)
         }
@@ -377,6 +425,14 @@ fn migrate_store(plan: &Plan, args: &InitArgs, current: Option<String>) -> anyho
         anyhow::bail!("the store has uncommitted changes; commit or stash them, then re-run");
     }
     if plan.store.join(LEGACY_LOCAL).exists() {
+        // Untracked and gitignored (ADR-012), so git keeps no copy: back it up.
+        let backup = backup_dir(&plan.home)?;
+        std::fs::create_dir_all(&backup)?;
+        std::fs::copy(plan.store.join(LEGACY_LOCAL), backup.join(LEGACY_LOCAL))?;
+        println!(
+            "backed up {LEGACY_LOCAL} -> {}",
+            backup.join(LEGACY_LOCAL).display()
+        );
         let src = std::fs::read_to_string(plan.store.join(LEGACY_LOCAL)).unwrap_or_default();
         if src.contains("[packages]") {
             eprintln!(
@@ -418,21 +474,29 @@ fn rebase_store(plan: &Plan, id: &str) -> anyhow::Result<()> {
 
 // ---------------------------------------------------------------- shared steps
 
-fn ensure_packages_dir(store: &Path, profile: Option<&str>) -> anyhow::Result<()> {
+/// Create `packages/<profile>/` if absent; returns the paths it created so the
+/// caller can stage exactly those.
+fn ensure_packages_dir(store: &Path, profile: Option<&str>) -> anyhow::Result<Vec<String>> {
     let name = profile
         .map(str::to_string)
         .unwrap_or_else(crate::pkg::short_hostname);
     let dir = store.join("packages").join(&name);
-    if !dir.exists() {
-        std::fs::create_dir_all(&dir)?;
-        std::fs::write(dir.join(".gitkeep"), "")?;
-        println!("created packages/{name}/");
+    if dir.exists() {
+        return Ok(vec![]);
     }
-    Ok(())
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join(".gitkeep"), "")?;
+    println!("created packages/{name}/");
+    Ok(vec![format!("packages/{name}/.gitkeep")])
 }
 
-fn commit_if_dirty(store: &Path, msg: &str) -> anyhow::Result<()> {
-    git(store, &["add", "-A"])?;
+/// Commit tracked changes plus `new_paths`. Untracked files stay untracked:
+/// a migration commit is only the migration.
+fn commit_if_dirty(store: &Path, msg: &str, new_paths: &[String]) -> anyhow::Result<()> {
+    git(store, &["add", "-u"])?;
+    for p in new_paths {
+        git(store, &["add", "--", p])?;
+    }
     let staged = git_stdout(store, &["diff", "--cached", "--name-only"])?;
     if staged.trim().is_empty() {
         return Ok(());
@@ -468,9 +532,12 @@ fn offer_remote(plan: &Plan, args: &InitArgs) -> anyhow::Result<()> {
         None if !std::io::stdin().is_terminal() || !gh_ok() => Remote::None,
         None => {
             println!("\nThe store is a local git repo. Create a private GitHub remote for it?");
-            if ask("create github.com/<you>/{} [y/N]", Some("n"))?
-                .to_lowercase()
-                .starts_with('y')
+            if ask(
+                &format!("create github.com/<you>/{} [y/N]", args.repo_name),
+                Some("n"),
+            )?
+            .to_lowercase()
+            .starts_with('y')
             {
                 Remote::Github
             } else {

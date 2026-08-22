@@ -160,6 +160,10 @@ struct Ctx {
     binding_path: PathBuf,
     /// The host binding, if this machine has been through `init`.
     binding: Option<HostBinding>,
+    /// Whether `repo_root` is the binding's store. `--repo-root` or
+    /// `$DOTFILES_DIR` can point at another store, whose profile state is its
+    /// own (ADR-013 §3).
+    bound: bool,
 }
 
 /// `--home`, else `$HOME`.
@@ -174,22 +178,9 @@ impl Ctx {
     fn resolve(cli: &Cli) -> anyhow::Result<Self> {
         let home = home_dir(cli)?;
 
-        // Locate the dotfiles store: explicit --repo-root, else $DOTFILES_DIR,
-        // else the host binding's `store.path`, else ~/.dotfiles (ADR-013 §3).
         let binding_path = HostBinding::default_path(&home);
-        let binding = match HostBinding::load(&binding_path) {
-            Ok(b) => b,
-            Err(msg) => {
-                eprintln!("dotfiles: {msg}");
-                std::process::exit(2);
-            }
-        };
-        let store = cli
-            .repo_root
-            .clone()
-            .or_else(|| std::env::var_os("DOTFILES_DIR").map(PathBuf::from))
-            .or_else(|| binding.as_ref().and_then(|b| b.store_path(&home)))
-            .unwrap_or_else(|| home.join(".dotfiles"));
+        let binding = load_binding(&binding_path);
+        let (store, bound) = resolve_store(cli, &home, binding.as_ref());
         let manifest = cli
             .manifest
             .clone()
@@ -206,7 +197,12 @@ impl Ctx {
             eprintln!("dotfiles: run `dotfiles init` to set this host up (ADR-013).");
             std::process::exit(2);
         }
-        let profile = resolve_active_profile(cli, &repo_root, &manifest, binding.as_ref());
+        let profile = resolve_active_profile(
+            cli,
+            &repo_root,
+            &manifest,
+            binding.as_ref().filter(|_| bound),
+        );
         Ok(Ctx {
             manifest,
             repo_root,
@@ -214,6 +210,7 @@ impl Ctx {
             profile,
             binding_path,
             binding,
+            bound,
         })
     }
 
@@ -230,6 +227,62 @@ impl Ctx {
         let src = std::fs::read_to_string(&self.manifest)
             .map_err(|e| anyhow::anyhow!("reading {}: {e}", self.manifest.display()))?;
         Ok(Manifest::from_toml(&src)?)
+    }
+}
+
+/// Read the host binding. A malformed file is reported and treated as absent:
+/// `--repo-root`/`$DOTFILES_DIR` still work, and `init` can rewrite it.
+fn load_binding(path: &Path) -> Option<HostBinding> {
+    match HostBinding::load(path) {
+        Ok(b) => b,
+        Err(msg) => {
+            eprintln!("dotfiles: warning: {msg}; `dotfiles init` rewrites it");
+            None
+        }
+    }
+}
+
+/// Locate the store (ADR-013 §3): `--repo-root` → `$DOTFILES_DIR` → the
+/// binding's `store.path` → `~/.dotfiles`. Relative paths are anchored at the
+/// current directory. Returns whether the result is the binding's store.
+fn resolve_store(cli: &Cli, home: &Path, binding: Option<&HostBinding>) -> (PathBuf, bool) {
+    let bound_path = binding.and_then(|b| b.store_path(home));
+    let explicit = cli
+        .repo_root
+        .clone()
+        .or_else(|| std::env::var_os("DOTFILES_DIR").map(PathBuf::from))
+        .map(|p| absolute(&p));
+    match explicit {
+        Some(p) => {
+            let same = bound_path.as_deref().is_some_and(|b| same_dir(b, &p));
+            (p, same)
+        }
+        None => match bound_path {
+            Some(b) => (b, true),
+            None => (home.join(".dotfiles"), false),
+        },
+    }
+}
+
+/// Absolute form of a path: canonical when it exists, cwd-anchored otherwise.
+fn absolute(p: &Path) -> PathBuf {
+    if let Ok(c) = p.canonicalize() {
+        return c;
+    }
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|d| d.join(p))
+            .unwrap_or_else(|_| p.to_path_buf())
+    }
+}
+
+/// Two paths name the same directory (either may not exist yet).
+fn same_dir(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a == b,
     }
 }
 
