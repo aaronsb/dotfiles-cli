@@ -194,7 +194,7 @@ impl Ctx {
         // First-run gate (ADR-001 #7): operate only inside a git repo.
         if let Err(msg) = dotfiles_core::first_run_gate(&repo_root) {
             eprintln!("dotfiles: {msg}");
-            eprintln!("dotfiles: run `dotfiles init` to set this host up (ADR-013).");
+            eprintln!("dotfiles: run `dotfiles init` to set this host up.");
             std::process::exit(2);
         }
         let profile = resolve_active_profile(

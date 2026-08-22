@@ -63,7 +63,7 @@ impl HostBinding {
             .ok_or_else(|| format!("{} has no parent", path.display()))?;
         std::fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
         let body = format!(
-            "# dotfiles host binding (ADR-013). Per machine; never committed.\n\n{}",
+            "# dotfiles host binding. Per machine; never committed.\n\n{}",
             toml::to_string(self).map_err(|e| e.to_string())?
         );
         let tmp = dir.join(format!(".config.toml.tmp-{}", std::process::id()));
